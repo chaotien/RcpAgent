@@ -1,0 +1,403 @@
+# ==============================================================================
+# SOP-TBS-001 工具模擬器自動化操作配置 (Cleaned Version)
+# Removed redundant 'method' field in detection.
+# ==============================================================================
+
+global_config:
+  app_name: "ToolBehaviorSimulator.exe"
+  default_timeout: 5.0
+  action_post_delay: 0.5
+  max_retries: 3
+  max_state_loops: 5
+  pixel_diff_threshold: 0.05
+
+roi_map:
+  top_menu:        [0.0, 0.0,  1.0,  0.10]
+  top_right:       [0.8, 0.0,  0.2,  0.10]
+  toolbar:         [0.0, 0.10, 1.0,  0.08]
+  port_1_control:  [0.0, 0.0, 0.30, 1.0]
+  port_2_control:  [0.12, 0.0, 0.30, 1.0]
+  engineering_pnl: [0.02, 0.20, 0.35, 0.75]
+  schematic_full:  [0.35, 0.0, 0.65, 0.80]
+  schematic_p1:    [0.25, 0.0, 0.5, 0.20]
+  schematic_p2:    [0.25, 0.20, 0.5, 0.30]
+  dialog_center:   [0.25, 0.25, 0.50, 0.50]
+
+states:
+  # ----------------------------------------------------------------------------
+  # Phase 1
+  # ----------------------------------------------------------------------------
+  - name: "check_system_connection"
+    detection:
+      roi: "top_right"
+      target_features: [{ type: "ocr", text: "CONNECTED", confidence: 0.9 }]
+    action:
+      type: "wait"
+      duration: 1.0
+    verification:
+      type: "appear"
+      roi: "top_right"
+      target_features: [{ type: "ocr", text: "CONNECTED" }]
+    transitions:
+      on_success: "switch_to_production_mode"
+      on_fail:
+        fallback: "abort_task"
+
+  # ----------------------------------------------------------------------------
+  # Phase 2
+  # ----------------------------------------------------------------------------
+  - name: "switch_to_production_mode"
+    detection:
+      roi: "top_menu"
+      target_features: [{ type: "ocr", text: "Mode" }]
+    action:
+      type: "click_sequence"
+      sequence:
+        - { text: "Mode", delay: 0.3 }
+        - { text: "Productive Mode", delay: 0.3 }
+        - { text: "Production", delay: 0.3 }
+    verification:
+      type: "appear"
+      roi: "port_1_control"
+      target_features: [{ type: "ocr", text: "LoadPort" }]
+    transitions:
+      on_success: "set_port_1_auto"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "set_port_1_auto"
+    detection:
+      roi: "port_1_control"
+      target_features:
+        - { type: "image", path: "assets/btn_go_auto_gray.png" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "port_1_control"
+      target_features: 
+        - { type: "image", path: "assets/btn_go_manual_green.png" }
+    transitions:
+      on_success: "set_port_2_auto"
+      on_fail:
+        error_branches:
+          - condition: { type: "ocr", text: "Go Manual", roi: "port_1_control" }
+            next_state: "set_port_2_auto"
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "set_port_2_auto"
+    detection:
+      roi: "port_2_control"
+      target_features:
+        - { type: "image", path: "assets/btn_go_auto_gray.png" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "port_2_control"
+      target_features:
+        - { type: "image", path: "assets/btn_go_manual_green.png" }
+    transitions:
+      on_success: "trigger_wafer_arrival_port_2"
+      on_fail:
+        error_branches:
+          - condition: { type: "ocr", text: "Go Manual", roi: "port_2_control" }
+            next_state: "trigger_wafer_arrival_port_2"
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "trigger_wafer_arrival_port_2"
+    detection:
+      roi: "top_menu"
+      target_features: [{ type: "ocr", text: "Simulations" }]
+    action:
+      type: "click_sequence"
+      sequence:
+        - { text: "Simulations", delay: 0.3 }
+        - { text: "Wafer Arrival", delay: 0.3 }
+        - { text: "Arrive to port 2", delay: 0.3 }
+    verification:
+      type: "appear"
+      timeout: 8.0 
+      roi: "schematic_p2" 
+      target_features:
+        - { type: "ocr", text: "CLAMPED" }
+        - { type: "image", path: "assets/status_clamped_blue.png" }
+    transitions:
+      on_success: "switch_to_engineering_mode"
+      on_fail:
+        error_branches:
+          - condition: { type: "ocr", text: "PRESENT", roi: "schematic_p2" }
+            next_state: "set_port_2_auto"
+        fallback: "abort_task"
+
+  # ----------------------------------------------------------------------------
+  # Phase 3
+  # ----------------------------------------------------------------------------
+  - name: "switch_to_engineering_mode"
+    detection:
+      roi: "top_menu"
+      target_features: [{ type: "ocr", text: "Mode" }]
+    action:
+      type: "click_sequence"
+      sequence:
+        - { text: "Mode", delay: 0.3 }
+        - { text: "Productive Mode", delay: 0.3 }
+        - { text: "Engineering", delay: 0.3 }
+    verification:
+      type: "appear"
+      roi: "toolbar"
+      target_features: [{ type: "ocr", text: "Wafer Load" }]
+    transitions:
+      on_success: "enable_wafer_load_module"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "enable_wafer_load_module"
+    detection:
+      roi: "toolbar"
+      target_features:
+        - { type: "ocr", text: "Wafer Load" }
+        - { type: "image", path: "assets/icon_wafer_load.png" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Select Port:" }]
+    transitions:
+      on_success: "decide_active_port"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "decide_active_port"
+    detection:
+      roi: "schematic_p2"
+      retry: 0
+      target_features:
+        - { type: "ocr", text: "CLAMPED" }
+        - { type: "image", path: "assets/status_clamped_blue.png" }
+    action:
+      type: "log"
+      message: "Decision: Port 2 seems active."
+    verification:
+      type: "appear"
+      roi: "schematic_p2"
+      target_features: [{ type: "ocr", text: "CLAMPED" }]
+    transitions:
+      on_success: "expand_dropdown_for_p2"
+      on_fail:
+        error_branches:
+          - condition: { type: "ocr", text: "CLAMPED", roi: "schematic_p1" }
+            next_state: "expand_dropdown_for_p1"
+        fallback: "abort_task"
+
+  # --- Path for Port 2 (Anchor Logic) ---
+
+  - name: "expand_dropdown_for_p2"
+    detection:
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Select Port:" }]
+    action:
+      type: "click"
+      offset: [0, 94]
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "2" }]
+    transitions:
+      on_success: "click_port_2_option"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "click_port_2_option"
+    detection:
+      roi: "engineering_pnl"
+      # [Anchor] 定位 Select Port 標籤
+      anchor:
+        feature: { type: "ocr", text: "Select Port:" }
+        search_area: [-50, 20, 200, 150]
+      target_features:
+        #- { type: "ocr", text: "2" }
+        - { type: "image", path: "assets/dropdown_port2_0.png" }
+        - { type: "image", path: "assets/dropdown_port2_1.png" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      anchor:
+        feature: { type: "ocr", text: "Select Port:" }
+        search_area: [-50, 20, 200, 150]
+      target_features:
+        - { type: "image", path: "assets/dropdown_port2_done_3.png", confidence: 0.0 }
+    transitions:
+      on_success: "load_carrier_map"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  # --- Path for Port 1 (Anchor Logic) ---
+
+  - name: "expand_dropdown_for_p1"
+    detection:
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Select Port:" }]
+    action:
+      type: "click"
+      offset: [0, 94]
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "1" }]
+    transitions:
+      on_success: "click_port_1_option"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "click_port_1_option"
+    detection:
+      roi: "engineering_pnl"
+      anchor:
+        feature: { type: "ocr", text: "Select Port:" }
+        search_area: [-50, 20, 200, 150]
+      target_features:
+        - { type: "ocr", text: "1" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      anchor:
+        feature: { type: "ocr", text: "Select Port:" }
+        search_area: [-50, 20, 200, 50]
+      target_features: [{ type: "ocr", text: "1" }]
+    transitions:
+      on_success: "load_carrier_map"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  # --- Recipe Flow ---
+
+  - name: "load_carrier_map"
+    detection:
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Load Carrier" }]
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Occupied" }]
+    transitions:
+      on_success: "select_with_recipe_mode"
+      on_fail:
+        error_branches:
+          - condition: { type: "ocr", text: "Not Ready" } 
+            next_state: "switch_to_production_mode"
+        fallback: "abort_task"
+
+  - name: "select_with_recipe_mode"
+    detection:
+      roi: "engineering_pnl"
+      target_features:
+        - { type: "ocr", text: "With Recipe" }
+        - { type: "image", path: "assets/radio_with_recipe_empty.png" }
+    action:
+      type: "click"
+      offset: [-20, 0] 
+    verification:
+      type: "appear"
+      roi: "dialog_center"
+      timeout: 3.0
+      target_features:
+        - { type: "ocr", text: "Open Recipe File" }
+        - { type: "image", path: "assets/title_open_recipe.png" }
+    transitions:
+      on_success: "enter_recipe_name"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "enter_recipe_name"
+    detection:
+      roi: "dialog_center"
+      target_features:
+        - { type: "image", path: "assets/open_file_name.png" }
+    action:
+      type: "input_text"
+      text: "ai_testing.xml"
+      offset: [100, 0] 
+      submit_key: "none"
+    verification:
+      type: "appear"
+      roi: "dialog_center"
+      target_features: [{ type: "ocr", text: "Open" }]
+    transitions:
+      on_success: "confirm_open_file"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "confirm_open_file"
+    detection:
+      roi: "dialog_center"
+      target_features:
+        - { type: "image", path: "assets/btn_open_0.png" }
+        - { type: "image", path: "assets/btn_open_1.png" }
+    action:
+      type: "click"
+    verification:
+      type: "disappear"
+      roi: "dialog_center"
+      target_features: [{ type: "ocr", text: "Open Recipe File" }]
+    transitions:
+      on_success: "wait_recipe_loading"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+        
+  - name: "wait_recipe_loading"
+    detection:
+        method: "dummy" # 這裡保留 dummy，作為明確的「跳過偵測」指令
+    action:
+        type: "wait"
+        duration: 2.0
+    verification:
+        type: "appear"
+        roi: "engineering_pnl"
+        target_features: [{ type: "ocr", text: "Load Wafer" }]
+    transitions:
+        on_success: "execute_wafer_transfer"
+
+  - name: "execute_wafer_transfer"
+    detection:
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Load Wafer" }]
+    action:
+      type: "click"
+    verification:
+      timeout: 15.0
+      type: "appear"
+      roi: "schematic_full"
+      target_features: 
+      - { type: "image", path: "assets/wafer_on_chuck.png" }
+    transitions:
+      on_success: "end_task"
+      on_fail:
+        retry: 1
+        fallback: "report_transfer_timeout"
+
+  - name: "end_task"
+    detection:
+      method: "dummy"
+    action:
+      type: "log"
+      message: "SOP-TBS-001 Completed Successfully."
