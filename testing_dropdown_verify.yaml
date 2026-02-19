@@ -1,0 +1,156 @@
+# ==============================================================================
+# SOP-TBS-001-short-testing 
+# ==============================================================================
+
+global_config:
+  app_name: "ToolBehaviorSimulator.exe"
+  default_timeout: 5.0
+  action_post_delay: 1.0
+  max_retries: 3
+  max_state_loops: 5
+  pixel_diff_threshold: 0.05
+
+roi_map:
+  top_menu:        [0.0, 0.0,  1.0,  0.10]
+  top_right:       [0.8, 0.0,  0.2,  0.10]
+  toolbar:         [0.0, 0.10, 1.0,  0.08]
+  port_1_control:  [0.0, 0.0, 0.30, 1.0]
+  port_2_control:  [0.15, 0.0, 0.30, 1.0]
+  engineering_pnl: [0.02, 0.20, 0.35, 0.75]
+  schematic_full:  [0.35, 0.0, 0.65, 0.80]
+  schematic_p1:    [0.25, 0.0, 0.5, 0.20]
+  schematic_p2:    [0.25, 0.20, 0.5, 0.30]
+  dialog_center:   [0.25, 0.25, 0.50, 0.50]
+
+states:
+  # ----------------------------------------------------------------------------
+  # Phase 1
+  # ----------------------------------------------------------------------------
+  - name: "check_system_connection"
+    detection:
+      roi: "top_right"
+      target_features: [{ type: "ocr", text: "CONNECTED", confidence: 0.9 }]
+    action:
+      type: "wait"
+      duration: 0.1
+    verification:
+      type: "appear"
+      roi: "top_right"
+      target_features: [{ type: "ocr", text: "CONNECTED" }]
+    transitions:
+      on_success: "switch_to_engineering_mode"
+      on_fail:
+        fallback: "abort_task"
+  # ----------------------------------------------------------------------------
+  # Phase 3
+  # ----------------------------------------------------------------------------
+  - name: "switch_to_engineering_mode"
+    detection:
+      roi: "top_menu"
+      target_features: [{ type: "ocr", text: "Mode" }]
+    action:
+      type: "click_sequence"
+      sequence:
+        - { text: "Mode", delay: 0.2 }
+        - { text: "Productive Mode", delay: 0.2 }
+        - { text: "Engineering", delay: 0.2 }
+    verification:
+      type: "appear"
+      roi: "toolbar"
+      target_features: [{ type: "ocr", text: "Wafer Load" }]
+    transitions:
+      on_success: "enable_wafer_load_module"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "enable_wafer_load_module"
+    detection:
+      roi: "toolbar"
+      target_features:
+        - { type: "ocr", text: "Wafer Load" }
+        - { type: "image", path: "assets/icon_wafer_load.png" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Select Port:" }]
+    transitions:
+      on_success: "expand_dropdown_for_p2"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  # --- Path for Port 2 (Anchor Logic) ---
+
+  - name: "expand_dropdown_for_p2"
+    detection:
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Select Port:" }]
+    action:
+      type: "click"
+      offset: [0, 94]
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "2" }]
+    transitions:
+      on_success: "click_port_2_option"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  - name: "click_port_2_option"
+    detection:
+      roi: "engineering_pnl"
+      # [Anchor] 定位 Select Port 標籤
+      anchor:
+        feature: { type: "ocr", text: "Select Port:" }
+        search_area: [-50, 20, 200, 150]
+      target_features:
+        #- { type: "ocr", text: "2" }
+        - { type: "image", path: "assets/dropdown_port2_0.png" }
+        - { type: "image", path: "assets/dropdown_port2_1.png" }
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      anchor:
+        feature: { type: "ocr", text: "Select Port:" }
+        search_area: [-50, 20, 200, 150]
+      target_features:
+        - { type: "image", path: "assets/dropdown_port2_done_3.png" }
+    transitions:
+      on_success: "load_carrier_map"
+      on_fail:
+        retry: 2
+        fallback: "abort_task"
+
+  # --- Recipe Flow ---
+
+  - name: "load_carrier_map"
+    detection:
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Load Carrier" }]
+    action:
+      type: "click"
+    verification:
+      type: "appear"
+      roi: "engineering_pnl"
+      target_features: [{ type: "ocr", text: "Load Carrier" }]
+    transitions:
+      on_success: "end_task"
+      on_fail:
+        error_branches:
+          - condition: { type: "ocr", text: "Not Ready" } 
+            next_state: "switch_to_production_mode"
+        fallback: "abort_task"
+
+  - name: "end_task"
+    detection:
+      method: "dummy"
+    action:
+      type: "log"
+      message: "SOP-TBS-001-Short Completed Successfully."
