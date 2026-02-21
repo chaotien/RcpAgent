@@ -338,7 +338,7 @@ class AgentEngine:
         return fallback
 
 if __name__ == "__main__":
-    yaml_file = "sop_tbs_001_workflow.yaml"
+    yaml_file = "workflows/sop_tbs_001_workflow.yaml"
     if len(sys.argv) > 1: yaml_file = sys.argv[1]
     
     engine = AgentEngine(yaml_file)

@@ -1,0 +1,7 @@
+pyautogui
+opencv-python
+numpy
+easyocr
+PyYAML
+Pillow
+PyQt5
