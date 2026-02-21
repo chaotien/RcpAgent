@@ -13,7 +13,7 @@ def run_suite():
         sim_proc = subprocess.Popen([sys.executable, "tool_simulator_qt.py"])
 
     # 2. 給予緩衝時間讓 GUI 載入
-    time.sleep(5) 
+    time.sleep(3)
 
     # 3. 啟動測試引擎 (阻塞模式，等待測試完成)
     print(">>> Starting Automation Engine...")
