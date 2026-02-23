@@ -27,27 +27,35 @@
      feature: { type: "ocr", text: "X文字" }
      search_area: [-50, 20, 200, 150]
    ```
-5. **跳過偵測**: 如果該步驟只是等待或直接執行，`detection` 請加上 `method: "dummy"`。
-6. **Transitions**:
+5. **Action 附加參數 (重要)**:
+   - `offset: [x, y]`: 若需要點擊目標旁邊的特定位置，使用相對位移參數 (適用於 `click`, `input_text`)。
+   - `clear_first: true`: 若動作是 `input_text`，且需先清空或全選輸入框原有文字，請加上此參數。
+   - `submit_key: "none" 或 "enter"`: 若動作是 `input_text`，指定輸入後是否要按下特定按鍵。
+6. **跳過偵測**: 如果該步驟只是等待或直接執行，`detection` 請加上 `method: "dummy"`。
+7. **Transitions**:
    - `on_success`: 必須指向「下一個狀態」的名稱。
    - `on_fail`: 預設加上 `retry: 2` 與 `fallback: "abort_task"`。
    - 最後一個步驟的 `on_success` 請指向 `"end_task"`。
 
 ## YAML 骨架範例 (Example)
 ```yaml
-  - name: "click_load_carrier"
+  - name: "input_recipe_name"
     detection:
       roi: "TODO_ROI"
       target_features:
-        - { type: "image", path: "assets/TODO_load_carrier_btn.png" }
+        - { type: "ocr", text: "File name:" }
     action:
-      type: "click"
+      type: "input_text"
+      text: "my_recipe.xml"
+      offset: [100, 0]      # 向右偏移 100px 點擊輸入框
+      clear_first: true     # 輸入前先清空原有文字
+      submit_key: "none"
     verification:
       type: "appear"
       timeout: 5.0
       roi: "TODO_ROI"
       target_features:
-        - { type: "ocr", text: "Occupied" }
+        - { type: "ocr", text: "Open" }
     transitions:
       on_success: "next_step_name"
       on_fail:
