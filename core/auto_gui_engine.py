@@ -199,6 +199,10 @@ class AgentEngine:
         self.global_config = self.config.get("global_config", {})
         self.states = {s["name"]: s for s in self.config.get("states", [])}
         
+        # 載入全域中斷防禦機制
+        self.interrupt_handlers = self.config.get("interrupt_handlers", [])
+        self.interrupt_triggers = defaultdict(int) # 紀錄觸發次數: f"{state_name}_{handler_name}" -> count
+
         self.vision = VisionSystem()
         self.screen = ScreenManager(self.config.get("roi_map", {}))
         self.executor = ActionExecutor(self.global_config, self.vision, self.screen)
@@ -224,6 +228,42 @@ class AgentEngine:
             return (coords[0] + ax, coords[1] + ay, aw, ah)
         logger.warning("   ⚠️ Anchor not found, using base ROI")
         return base_roi
+    
+    def _attempt_recovery(self, state_name: str) -> bool:
+        """
+        當找不到目標時，嘗試觸發全域防禦機制 (例如點擊 Taskbar 喚回視窗)
+        """
+        if not self.interrupt_handlers:
+            return False
+            
+        logger.info(f"🛡️ Entering Defense Mode for state [{state_name}]...")
+        
+        for handler in self.interrupt_handlers:
+            h_name = handler["name"]
+            trigger_key = f"{state_name}_{h_name}"
+            max_t = handler.get("max_triggers", 1)
+            
+            # 檢查是否已超過該 State 的防禦次數上限
+            if self.interrupt_triggers[trigger_key] >= max_t:
+                continue
+                
+            # 嘗試偵測搗亂視窗或 Taskbar Icon
+            d_cfg = handler.get("detection", {})
+            found, coords, used_roi = self._detect_with_retry(d_cfg, f"defense_{h_name}")
+            
+            if found:
+                logger.warning(f"🚨 Defense Triggered: {h_name} ({self.interrupt_triggers[trigger_key]+1}/{max_t})")
+                
+                # 執行消除動作 (例如點擊工具列圖示3次)
+                if "action" in handler:
+                    self.executor.execute(handler["action"], coords or (0,0), roi=used_roi)
+                
+                # 紀錄次數
+                self.interrupt_triggers[trigger_key] += 1
+                return True # 成功執行防禦
+                
+        logger.info("🛡️ Defense failed or not applicable. Proceeding to fail handlers.")
+        return False
 
     def run(self, start_state="check_system_connection"):
         curr = start_state
@@ -287,6 +327,11 @@ class AgentEngine:
         
         if not found:
             logger.warning(f"⚠️ Detection Failed for [{state['name']}]")
+            # 攔截！嘗試全域防禦
+            if self._attempt_recovery(state['name']):
+                logger.info(f"🔄 Defense completed. Restarting state [{state['name']}]")
+                time.sleep(1.0) # 給 UI 一點時間切換
+                return state['name'] # 防禦成功，重新進入本 State 執行
             return self._handle_fail(state)
 
         # 2. Action (傳入 used_roi 給 click_sequence 使用)
@@ -297,6 +342,11 @@ class AgentEngine:
         if "verification" in state:
             if not self._verify(state["verification"], state['name']):
                 logger.warning(f"⚠️ Verification Failed for [{state['name']}]")
+                # 攔截！嘗試全域防禦 (如果驗證失敗可能是突然跳出視窗擋住)
+                if self._attempt_recovery(state['name']):
+                    logger.info(f"🔄 Defense completed. Restarting state [{state['name']}]")
+                    time.sleep(1.0)
+                    return state['name'] # 防禦成功，重新進入本 State 執行
                 return self._handle_fail(state)
 
         self.retries[state['name']] = 0 

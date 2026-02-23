@@ -22,6 +22,27 @@ roi_map:
   schematic_p1:    [0.25, 0.0, 0.5, 0.20]
   schematic_p2:    [0.25, 0.20, 0.5, 0.30]
   dialog_center:   [0.25, 0.25, 0.50, 0.50]
+  taskbar_area:    [0.0, 0.90, 1.0, 0.10] # [NEW] Windows 工具列專用區域
+
+# ==============================================================================
+# [NEW] 全域中斷處理機制 (Global Defense)
+# 當任何一個 State 的 detection 找不到目標時，會優先來此尋求救援。
+# ==============================================================================
+interrupt_handlers:
+  - name: "force_restore_window"
+    max_triggers: 1  # 每個 State 只允許點擊工具列 1 次，避免死循環
+    detection:
+      roi: "taskbar_area"
+      target_features:
+        - { type: "image", path: "assets/taskbar_app_icon_0.png" } 
+        - { type: "image", path: "assets/taskbar_app_icon_1.png" } 
+    action:
+      type: "click_sequence"
+      sequence:
+        # 巧妙利用: 不給特徵(text/image) 時，click_sequence 會沿用 base (即工具列圖示的座標) 原地點擊
+        - { delay: 0.5 } # Click 1: 取得焦點 / 最小化
+        - { delay: 0.5 } # Click 2: 狀態切換
+        - { delay: 0.5 } # Click 3: 強制置頂還原
 
 states:
   # ----------------------------------------------------------------------------
