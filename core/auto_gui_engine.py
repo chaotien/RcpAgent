@@ -144,11 +144,28 @@ class ActionExecutor:
         elif atype == "input_text":
             text = config.get("text", "")
             offset = config.get("offset", [0, 0])
-            if coords: pyautogui.click(coords[0] + offset[0], coords[1] + offset[1])
-            time.sleep(0.2)
-            pyautogui.write(text)
-            if config.get("submit_key") and config.get("submit_key") != "none":
-                pyautogui.press(config.get("submit_key"))
+            submit = config.get("submit_key", None)
+            clear_first = config.get("clear_first", False) # [NEW] 讀取是否需要清空
+            
+            if coords:
+                fx, fy = coords[0] + offset[0], coords[1] + offset[1]
+                pyautogui.click(fx, fy)
+                time.sleep(0.2)
+                
+                # [NEW] 執行全選並刪除的動作
+                if clear_first:
+                    logger.info(f"   🧹 Clearing existing text (Ctrl+A -> Del)")
+                    pyautogui.hotkey('ctrl', 'a')
+                    time.sleep(0.1)
+                    pyautogui.press('delete')
+                    time.sleep(0.1)
+                    
+            logger.info(f"   ⌨️ Action: Typing '{text}'")
+            pyautogui.write(text) # 輸入新文字
+            
+            if submit and submit.lower() != "none":
+                logger.info(f"   ⏎ Action: Pressing key '{submit}'")
+                pyautogui.press(submit)
             self._move_away()
 
         elif atype == "click_sequence":

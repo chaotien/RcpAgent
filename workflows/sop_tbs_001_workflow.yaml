@@ -276,7 +276,7 @@ states:
       roi: "engineering_pnl"
       anchor:
         feature: { type: "ocr", text: "Select Port:" }
-        search_area: [-50, 20, 200, 50]
+        search_area: [-50, 20, 200, 150]
       target_features: [{ type: "ocr", text: "1" }]
     transitions:
       on_success: "load_carrier_map"
@@ -335,6 +335,7 @@ states:
       type: "input_text"
       text: "ai_testing.xml"
       offset: [100, 0] 
+      clear_first: true   # <--- [新增這行] 告訴引擎輸入前先清空
       submit_key: "none"
     verification:
       type: "appear"
