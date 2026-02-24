@@ -30,7 +30,7 @@ logger = logging.getLogger("AgentEngine")
 logger.info(f"🚀 Engine started. Logs: {log_filename}")
 
 # ==============================================================================
-# 1. Vision System
+# 1. Vision System (新增 Scale Calibration 機制)
 # ==============================================================================
 class VisionSystem:
     def __init__(self, confidence_threshold=0.8):
@@ -38,6 +38,12 @@ class VisionSystem:
         self.MOCK_MODE = False 
         self.reader = None
         self._init_easyocr()
+        
+        # [NEW] 解析度/縮放自動校正參數
+        self.is_calibrated = False
+        self.scale_factor = 1.0
+        # 涵蓋常見的 Windows 縮放比例: 100%, 125%, 150%, 175%, 200%, 及縮小比例
+        self.calibration_scales = [1.0, 1.25, 1.5, 1.75, 2.0, 0.8, 0.75, 0.5]
 
     def _init_easyocr(self):
         try:
@@ -54,7 +60,7 @@ class VisionSystem:
 
         if self.MOCK_MODE: return True, (100, 100)
 
-        # 1. Image
+        # 1. Image (Template Matching 支援 Scale Calibration)
         if f_type == "image":
             path = feature.get("path")
             conf = feature.get("confidence", self.confidence_threshold)
@@ -63,15 +69,46 @@ class VisionSystem:
                     logger.error(f"      ❌ File not found: {path}")
                     return False, None
                 
-                box = pyautogui.locateOnScreen(path, region=roi, confidence=conf, grayscale=True)
-                if box:
-                    center = pyautogui.center(box)
-                    logger.info(f"      ✅ Found Image at {center}")
-                    return True, (center.x, center.y)
+                original_img = Image.open(path)
+                
+                # [NEW] 決定要掃描的縮放比例
+                # 如果尚未校正，掃描整個 calibration_scales；如果已校正，只用鎖定的 scale_factor
+                scales_to_try = [self.scale_factor] if self.is_calibrated else self.calibration_scales
+                
+                for scale in scales_to_try:
+                    new_w = int(original_img.width * scale)
+                    new_h = int(original_img.height * scale)
+                    
+                    if new_w == 0 or new_h == 0:
+                        continue
+                        
+                    # 縮放範本圖片 (使用 LANCZOS 確保縮放品質)
+                    resized_img = original_img.resize((new_w, new_h), Image.LANCZOS)
+                    
+                    try:
+                        box = pyautogui.locateOnScreen(resized_img, region=roi, confidence=conf, grayscale=True)
+                        if box:
+                            # 如果是第一次成功匹配，鎖定此縮放係數！
+                            if not self.is_calibrated:
+                                self.is_calibrated = True
+                                self.scale_factor = scale
+                                logger.info(f"\n      🎯 [Calibration Success] UI Scale Factor locked at: {scale}x")
+                                logger.info(f"      👉 All subsequent image matchings will use this scale.\n")
+                                
+                            center = pyautogui.center(box)
+                            logger.info(f"      ✅ Found Image at {center} (Scale used: {scale}x)")
+                            return True, (center.x, center.y)
+                    except pyautogui.ImageNotFoundException:
+                        pass # 繼續嘗試下一個縮放比例
+                        
+                # 如果所有 scale 都掃過還是找不到
+                logger.info("      ❌ Image Not Found (Tried all scales)" if not self.is_calibrated else "      ❌ Image Not Found")
+                return False, None
+                
             except Exception as e:
                 logger.warning(f"      ⚠️ Vision Error: {e}")
 
-        # 2. OCR
+        # 2. OCR (本來就具有一定的 Scale Invariance，但回傳的座標仍需配合縮放後的 ROI)
         elif f_type == "ocr":
             if not self.reader: return False, None
             target_text = feature.get("text")
@@ -100,7 +137,7 @@ class ScreenManager:
     def __init__(self, custom_rois: Optional[Dict] = None):
         w, h = pyautogui.size()
         self.screen_size = (w, h)
-        logger.info(f"🖥️ Screen Resolution: {w}x{h}")
+        logger.info(f"🖥️ Target Screen Resolution: {w}x{h}")
         self.mapping = {}
         if custom_rois:
             for key, val in custom_rois.items():
@@ -145,14 +182,13 @@ class ActionExecutor:
             text = config.get("text", "")
             offset = config.get("offset", [0, 0])
             submit = config.get("submit_key", None)
-            clear_first = config.get("clear_first", False) # [NEW] 讀取是否需要清空
+            clear_first = config.get("clear_first", False)
             
-            if coords:
+            if coords: 
                 fx, fy = coords[0] + offset[0], coords[1] + offset[1]
                 pyautogui.click(fx, fy)
                 time.sleep(0.2)
                 
-                # [NEW] 執行全選並刪除的動作
                 if clear_first:
                     logger.info(f"   🧹 Clearing existing text (Ctrl+A -> Del)")
                     pyautogui.hotkey('ctrl', 'a')
@@ -161,7 +197,7 @@ class ActionExecutor:
                     time.sleep(0.1)
                     
             logger.info(f"   ⌨️ Action: Typing '{text}'")
-            pyautogui.write(text) # 輸入新文字
+            pyautogui.write(text)
             
             if submit and submit.lower() != "none":
                 logger.info(f"   ⏎ Action: Pressing key '{submit}'")
@@ -197,12 +233,14 @@ class AgentEngine:
             self.config = yaml.safe_load(f)
         
         self.global_config = self.config.get("global_config", {})
-        self.states = {s["name"]: s for s in self.config.get("states", [])}
         
-        # 載入全域中斷防禦機制
+        # 保存狀態陣列，以維持 YAML 中的順序
+        self.states_list = self.config.get("states", [])
+        self.states = {s["name"]: s for s in self.states_list}
+        
         self.interrupt_handlers = self.config.get("interrupt_handlers", [])
-        self.interrupt_triggers = defaultdict(int) # 紀錄觸發次數: f"{state_name}_{handler_name}" -> count
-
+        self.interrupt_triggers = defaultdict(int)
+        
         self.vision = VisionSystem()
         self.screen = ScreenManager(self.config.get("roi_map", {}))
         self.executor = ActionExecutor(self.global_config, self.vision, self.screen)
@@ -210,14 +248,16 @@ class AgentEngine:
         self.loops = defaultdict(int)
         self.retries = defaultdict(int)
 
-    def _save_debug(self, name, roi):
+    def _save_debug(self, name, roi, return_path=False):
         try:
             fname = f"logs/debug_{time.strftime('%H%M%S')}_{name}.png"
             img = cv2.cvtColor(np.array(pyautogui.screenshot()), cv2.COLOR_RGB2BGR)
             if roi: cv2.rectangle(img, (roi[0], roi[1]), (roi[0]+roi[2], roi[1]+roi[3]), (0,0,255), 2)
             cv2.imwrite(fname, img)
             logger.warning(f"📸 Debug saved: {fname}")
-        except: pass
+            if return_path: return fname
+        except: 
+            return None
 
     def _resolve_anchor(self, cfg, base_roi):
         if not cfg: return base_roi
@@ -228,47 +268,44 @@ class AgentEngine:
             return (coords[0] + ax, coords[1] + ay, aw, ah)
         logger.warning("   ⚠️ Anchor not found, using base ROI")
         return base_roi
-    
+
     def _attempt_recovery(self, state_name: str) -> bool:
-        """
-        當找不到目標時，嘗試觸發全域防禦機制 (例如點擊 Taskbar 喚回視窗)
-        """
         if not self.interrupt_handlers:
             return False
             
         logger.info(f"🛡️ Entering Defense Mode for state [{state_name}]...")
-        
         for handler in self.interrupt_handlers:
             h_name = handler["name"]
             trigger_key = f"{state_name}_{h_name}"
             max_t = handler.get("max_triggers", 1)
             
-            # 檢查是否已超過該 State 的防禦次數上限
             if self.interrupt_triggers[trigger_key] >= max_t:
                 continue
                 
-            # 嘗試偵測搗亂視窗或 Taskbar Icon
             d_cfg = handler.get("detection", {})
             found, coords, used_roi = self._detect_with_retry(d_cfg, f"defense_{h_name}")
             
             if found:
                 logger.warning(f"🚨 Defense Triggered: {h_name} ({self.interrupt_triggers[trigger_key]+1}/{max_t})")
-                
-                # 執行消除動作 (例如點擊工具列圖示3次)
                 if "action" in handler:
                     self.executor.execute(handler["action"], coords or (0,0), roi=used_roi)
-                
-                # 紀錄次數
                 self.interrupt_triggers[trigger_key] += 1
-                return True # 成功執行防禦
+                return True
                 
         logger.info("🛡️ Defense failed or not applicable. Proceeding to fail handlers.")
         return False
 
-    def run(self, start_state="check_system_connection"):
+    # [NEW] 將 start_state 預設改為 None，並自動抓取第一個 state
+    def run(self, start_state: Optional[str] = None) -> dict:
+        if start_state is None:
+            if not self.states_list:
+                raise ValueError("YAML 檔案中沒有定義任何 states！")
+            start_state = self.states_list[0]["name"]
+            logger.info(f"👉 偵測到 YAML 初始起點，自動設定 start_state = '{start_state}'")
+
         curr = start_state
         try:
-            while curr not in ["end_task", "abort_task"]:
+            while curr not in ["end_task", "abort_task", "report_transfer_timeout"]:
                 logger.info(f"\n📍 Entering State: [{curr}]")
                 
                 state_def = self.states.get(curr)
@@ -283,78 +320,73 @@ class AgentEngine:
 
                 curr = self._process(state_def)
             
-            # [NEW] 任務成功結束後的截圖
-            logger.info(f"🏁 Finished. Final: {curr}")
-            if curr == "end_task":
-                logger.info("📸 Capturing success screenshot...")
-                self._save_debug("task_success", None)
+            # 將執行結果打包，供未來 Agent 呼叫使用
+            success = (curr == "end_task")
+            logger.info(f"🏁 Finished. Final State: {curr}")
             
+            report = {
+                "status": "success" if success else "failed",
+                "final_state": curr,
+                "screenshot_path": None
+            }
+
+            if success:
+                logger.info("📸 Capturing success screenshot...")
+                report["screenshot_path"] = self._save_debug("task_success", None, return_path=True)
+            else:
+                report["screenshot_path"] = self._save_debug("task_failed", None, return_path=True)
+
+            return report
+
         except Exception as e:
             logger.exception(f"⛔ Crash: {e}")
+            return {"status": "error", "final_state": curr, "screenshot_path": None}
 
     def _detect_with_retry(self, detect_cfg: Dict, state_name: str) -> Tuple[bool, Any, Any]:
-        """
-        [Refactor] 封裝 ROI 解析與特徵偵測邏輯
-        Return: (found, coords, final_used_roi)
-        """
-        # 1. 取得基礎 ROI
         roi_key = detect_cfg.get("roi")
         base_roi = self.screen.get_roi_rect(roi_key)
-        
-        # 2. 解析 Anchor (如果有) -> 得到最終偵測用的 ROI
         detection_roi = self._resolve_anchor(detect_cfg.get("anchor"), base_roi)
         
-        # 3. 處理 Dummy
         if detect_cfg.get("method") == "dummy":
             return True, None, detection_roi
 
-        # 4. 掃描 Target Features
         features = detect_cfg.get("target_features", [])
         for feature in features:
             found, coords = self.vision.detect(feature, roi=detection_roi)
             if found:
                 return True, coords, detection_roi
         
-        # [NEW] 失敗時截圖，使用計算後的 detection_roi
         self._save_debug(state_name + "_detect_fail", detection_roi)
-                
         return False, None, detection_roi
 
     def _process(self, state):
-        # 1. Detection (呼叫重構後的函式)
         d_cfg = state.get("detection", {})
         found, coords, used_roi = self._detect_with_retry(d_cfg, state['name'])
         
         if not found:
             logger.warning(f"⚠️ Detection Failed for [{state['name']}]")
-            # 攔截！嘗試全域防禦
             if self._attempt_recovery(state['name']):
                 logger.info(f"🔄 Defense completed. Restarting state [{state['name']}]")
-                time.sleep(1.0) # 給 UI 一點時間切換
-                return state['name'] # 防禦成功，重新進入本 State 執行
+                time.sleep(1.0)
+                return state['name']
             return self._handle_fail(state)
 
-        # 2. Action (傳入 used_roi 給 click_sequence 使用)
         if "action" in state:
             self.executor.execute(state["action"], coords or (0,0), roi=used_roi)
 
-        # 3. Verification
         if "verification" in state:
             if not self._verify(state["verification"], state['name']):
                 logger.warning(f"⚠️ Verification Failed for [{state['name']}]")
-                # 攔截！嘗試全域防禦 (如果驗證失敗可能是突然跳出視窗擋住)
                 if self._attempt_recovery(state['name']):
                     logger.info(f"🔄 Defense completed. Restarting state [{state['name']}]")
                     time.sleep(1.0)
-                    return state['name'] # 防禦成功，重新進入本 State 執行
+                    return state['name']
                 return self._handle_fail(state)
 
         self.retries[state['name']] = 0 
         return state["transitions"]["on_success"]
 
     def _verify(self, v_cfg, name):
-        """Verification Logic (Aligned with Detection)"""
-        # 1. Resolve ROI (Reuse logic)
         roi_key = v_cfg.get("roi")
         base_roi = self.screen.get_roi_rect(roi_key)
         check_roi = self._resolve_anchor(v_cfg.get("anchor"), base_roi)
@@ -380,7 +412,6 @@ class AgentEngine:
             
             time.sleep(0.5)
             
-        # 失敗時截圖，使用計算後的 check_roi
         self._save_debug(name+"_verify_fail", check_roi)
         return False
 
@@ -405,10 +436,12 @@ class AgentEngine:
         return fallback
 
 if __name__ == "__main__":
-    yaml_file = "workflows/sop_tbs_001_workflow.yaml"
+    yaml_file = "workflows/testing_dropdown_verify.yaml" if os.path.exists("workflows/") else "testing_dropdown_verify.yaml"
     if len(sys.argv) > 1: yaml_file = sys.argv[1]
     
     engine = AgentEngine(yaml_file)
     logger.info("⏳ Starting in 3s...")
     time.sleep(3)
+    
+    # [NEW] 不帶入參數，讓引擎自動決定從 YAML 第一個 state 開始
     engine.run()
