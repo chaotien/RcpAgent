@@ -1,69 +1,78 @@
 import pyautogui
 import time
-import datetime
 import os
+from datetime import datetime
 
-def run_vnc_headless_test(duration_seconds=120, interval=5):
-    """
-    VNC 環境存活與解析度測試腳本
-    將每隔 [interval] 秒記錄一次解析度並截圖，持續 [duration_seconds] 秒。
-    """
-    log_file = "vnc_test_log.txt"
-    output_dir = "vnc_test_shots"
-    
-    # 建立截圖資料夾
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+# 建立測試產出資料夾
+OUTPUT_DIR = "vnc_test_results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    print(f"[*] 開始 VNC 環境測試，預計執行 {duration_seconds} 秒...")
-    print(f"[*] 測試期間請嘗試：1. 縮放 VNC 視窗 2. 斷開 VNC 連線\n")
-    
-    with open(log_file, "w", encoding="utf-8") as f:
-        f.write("=== VNC 環境壓力測試 Log ===\n")
-        f.write(f"開始時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+def log_event(message):
+    """同時輸出到 Console 與 Log 檔，確保斷線時的紀錄能保留"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    formatted_msg = f"[{timestamp}] {message}"
+    print(formatted_msg)
+    with open(os.path.join(OUTPUT_DIR, "test_log.txt"), "a", encoding="utf-8") as f:
+        f.write(formatted_msg + "\n")
 
-    start_time = time.time()
-    iteration = 1
-
-    while (time.time() - start_time) < duration_seconds:
-        current_time_str = datetime.datetime.now().strftime('%H-%M-%S')
-        log_entry = ""
+def take_snapshot(phase_name, step):
+    """擷取螢幕並記錄當下解析度"""
+    try:
+        width, height = pyautogui.size()
+        img_name = f"{phase_name}_step{step}_{width}x{height}.png"
+        img_path = os.path.join(OUTPUT_DIR, img_name)
         
+        screenshot = pyautogui.screenshot()
+        screenshot.save(img_path)
+        log_event(f"成功截圖: {img_name} (解析度: {width}x{height})")
+    except Exception as e:
+        log_event(f"🚨 !! 截圖失敗 (可能是 GUI 渲染已停止) !! ❌ 錯誤: {e}")
+
+def phase_1_resolution_test():
+    log_event("=== [階段一] 解析度與 Client 干擾測試 ===")
+    log_event("請在接下來的 15 秒內，嘗試『縮放您的 VNC 視窗』或『改變 Client 解析度』...")
+    
+    for i in range(1, 4):
+        log_event(f"Phase 1 - 擷取第 {i}/3 張狀態...")
+        take_snapshot("Phase1", i)
+        time.sleep(5) # 給使用者 5 秒鐘調整視窗
+        
+def phase_2_disconnect_test():
+    log_event("\n=== [階段二] 斷線盲幹測試 (Headless Survivability) ===")
+    log_event("🚨 警告：請在 10 秒內『完全斷開並關閉您的 VNC Client』！ 🚨")
+    
+    for i in range(10, 0, -1):
+        log_event(f"倒數斷線: {i} 秒...")
+        time.sleep(1)
+        
+    log_event("--- 進入假設的斷線狀態 (黑暗期 30 秒) ---")
+    
+    # 在斷線期間執行 3 次動作與截圖
+    for i in range(1, 4):
+        time.sleep(10)
+        log_event(f"黑暗期第 {i} 次行動：嘗試相對移動滑鼠 (x+50, y+50) 並截圖...")
         try:
-            # 1. 紀錄解析度 (驗證 Q1)
-            screen_w, screen_h = pyautogui.size()
-            
-            # 2. 微調滑鼠以證明控制權 (驗證 Q2)
-            # 在中心點附近微幅晃動
-            center_x, center_y = screen_w // 2, screen_h // 2
-            pyautogui.moveTo(center_x + (iteration % 20), center_y + (iteration % 20))
-            current_mouse = pyautogui.position()
-            
-            # 3. 截圖 (驗證畫面是否全黑或被鎖定)
-            screenshot_path = os.path.join(output_dir, f"shot_{current_time_str}.png")
-            pyautogui.screenshot(screenshot_path)
-            
-            log_entry = (f"[{current_time_str}] 迭代 {iteration:02d} | "
-                         f"解析度: {screen_w}x{screen_h} | "
-                         f"滑鼠座標: {current_mouse} | 截圖成功")
-            
-        except pyautogui.FailSafeException:
-            log_entry = f"[{current_time_str}] 迭代 {iteration:02d} | 錯誤: 觸發 FailSafe (滑鼠被移至角落)"
-            break
+            pyautogui.move(50, 50, duration=0.5)
+            log_event("滑鼠移動指令執行完畢，無報錯。")
         except Exception as e:
-            log_entry = f"[{current_time_str}] 迭代 {iteration:02d} | 嚴重錯誤: {str(e)} (可能無畫面可渲染)"
-        
-        # 雙重輸出：印在終端機並寫入檔案 (因為斷線時您看不到終端機)
-        print(log_entry)
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(log_entry + "\n")
+            log_event(f"🚨 !! 滑鼠移動失敗 !! ❌ 錯誤: {e}")
             
-        iteration += 1
-        time.sleep(interval)
-
-    print("\n[*] 測試結束！請檢查 log 檔與截圖資料夾。")
+        take_snapshot("Phase2_Dark", i)
+        
+    log_event("--- 黑暗期結束 ---")
+    log_event("✅ 測試完成！您可以重新連上 VNC 了。")
+    log_event("請檢查資料夾中的 Log 與圖片，確認 Agent 在您離開時是否還活著。")
 
 if __name__ == "__main__":
-    # 強制關閉 FailSafe 以免斷線時座標異常導致腳本誤判中止
-    pyautogui.FAILSAFE = False 
-    run_vnc_headless_test()
+    # 清空舊的 log
+    log_path = os.path.join(OUTPUT_DIR, "test_log.txt")
+    if os.path.exists(log_path):
+        os.remove(log_path)
+        
+    pyautogui.FAILSAFE = False # 測試期間暫時關閉，避免斷線時滑鼠亂飄觸發防護
+    
+    log_event("啟動 VNC 環境壓力測試...")
+    phase_1_resolution_test()
+    phase_2_disconnect_test()
+    
+    pyautogui.FAILSAFE = True # 恢復安全設定
