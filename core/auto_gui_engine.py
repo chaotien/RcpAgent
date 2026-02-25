@@ -56,11 +56,15 @@ class VisionSystem:
         f_type = feature.get("type")
         target_info = feature.get("text") or feature.get("path") or "unknown"
         
-        logger.info(f"   👁️ Scanning [{f_type}]: '{target_info}' in ROI: {roi}")
+        # [NEW] 讀取是否啟用邊緣濾波
+        use_edge_filter = feature.get("edge_filter", False)
+        filter_msg = " [Edge Filter Enabled]" if use_edge_filter else ""
+        
+        logger.info(f"   👁️ Scanning [{f_type}]: '{target_info}' in ROI: {roi}{filter_msg}")
 
         if self.MOCK_MODE: return True, (100, 100)
 
-        # 1. Image (Template Matching 支援 Scale Calibration)
+        # 1. Image (Template Matching 支援 Scale Calibration & Edge Filter)
         if f_type == "image":
             path = feature.get("path")
             conf = feature.get("confidence", self.confidence_threshold)
@@ -71,9 +75,16 @@ class VisionSystem:
                 
                 original_img = Image.open(path)
                 
-                # [NEW] 決定要掃描的縮放比例
-                # 如果尚未校正，掃描整個 calibration_scales；如果已校正，只用鎖定的 scale_factor
+                # 決定要掃描的縮放比例
                 scales_to_try = [self.scale_factor] if self.is_calibrated else self.calibration_scales
+                
+                # 如果啟用了 Edge Filter，我們先截取螢幕 ROI 並做邊緣轉換
+                screen_edges = None
+                if use_edge_filter:
+                    screen_img = pyautogui.screenshot(region=roi)
+                    screen_gray = cv2.cvtColor(np.array(screen_img), cv2.COLOR_RGB2GRAY)
+                    # 使用 Canny 邊緣偵測 (數值 50, 150 為常用經驗值，可依需求調整)
+                    screen_edges = cv2.Canny(screen_gray, 50, 150)
                 
                 for scale in scales_to_try:
                     new_w = int(original_img.width * scale)
@@ -82,11 +93,43 @@ class VisionSystem:
                     if new_w == 0 or new_h == 0:
                         continue
                         
-                    # 縮放範本圖片 (使用 LANCZOS 確保縮放品質)
                     resized_img = original_img.resize((new_w, new_h), Image.LANCZOS)
                     
                     try:
-                        box = pyautogui.locateOnScreen(resized_img, region=roi, confidence=conf, grayscale=True)
+                        if use_edge_filter:
+                            # ---------------------------------------------------------
+                            # 【自訂 OpenCV 邊緣匹配邏輯】
+                            # ---------------------------------------------------------
+                            template_gray = cv2.cvtColor(np.array(resized_img), cv2.COLOR_RGB2GRAY)
+                            template_edges = cv2.Canny(template_gray, 50, 150)
+                            
+                            # 確保模板不會比螢幕擷取畫面還大
+                            if template_edges.shape[0] > screen_edges.shape[0] or template_edges.shape[1] > screen_edges.shape[1]:
+                                continue
+                                
+                            res = cv2.matchTemplate(screen_edges, template_edges, cv2.TM_CCOEFF_NORMED)
+                            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                            
+                            if max_val >= conf:
+                                # 計算中心點 (相對於整個螢幕)
+                                center_x = max_loc[0] + (new_w // 2)
+                                center_y = max_loc[1] + (new_h // 2)
+                                if roi:
+                                    center_x += roi[0]
+                                    center_y += roi[1]
+                                    
+                                box = True # Flag indicating success
+                            else:
+                                box = False
+                        else:
+                            # ---------------------------------------------------------
+                            # 【傳統 PyAutoGUI 灰階亮度匹配邏輯】
+                            # ---------------------------------------------------------
+                            box = pyautogui.locateOnScreen(resized_img, region=roi, confidence=conf, grayscale=True)
+                            if box:
+                                center = pyautogui.center(box)
+                                center_x, center_y = center.x, center.y
+                                
                         if box:
                             # 如果是第一次成功匹配，鎖定此縮放係數！
                             if not self.is_calibrated:
@@ -95,9 +138,9 @@ class VisionSystem:
                                 logger.info(f"\n      🎯 [Calibration Success] UI Scale Factor locked at: {scale}x")
                                 logger.info(f"      👉 All subsequent image matchings will use this scale.\n")
                                 
-                            center = pyautogui.center(box)
-                            logger.info(f"      ✅ Found Image at {center} (Scale used: {scale}x)")
-                            return True, (center.x, center.y)
+                            logger.info(f"      ✅ Found Image at ({center_x}, {center_y}) (Scale used: {scale}x)")
+                            return True, (center_x, center_y)
+                            
                     except pyautogui.ImageNotFoundException:
                         pass # 繼續嘗試下一個縮放比例
                         
