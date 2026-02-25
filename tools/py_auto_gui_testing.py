@@ -66,7 +66,7 @@ def test_action_layer():
 
 if __name__ == "__main__":
     print("=========================================")
-    print("  千手千眼 AI Agent - Local 環境驗證腳本")
+    print("  Rcp Agent - Local 環境驗證腳本")
     print("=========================================\n")
     
     setup_safety_protocols()

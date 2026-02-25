@@ -6,7 +6,7 @@
 global_config:
   app_name: "ToolBehaviorSimulator.exe"
   default_timeout: 5.0
-  action_post_delay: 0.5
+  action_post_delay: 0.2
   max_retries: 3
   max_state_loops: 5
   pixel_diff_threshold: 0.05
@@ -50,15 +50,14 @@ states:
   # ----------------------------------------------------------------------------
   - name: "check_system_connection"
     detection:
-      roi: "top_right"
-      target_features: [{ type: "ocr", text: "CONNECTED", confidence: 0.9 }]
+      method: "dummy" # 這裡保留 dummy，作為明確的「跳過偵測」指令
     action:
       type: "wait"
-      duration: 1.0
+      duration: 0
     verification:
       type: "appear"
       roi: "top_right"
-      target_features: [{ type: "ocr", text: "CONNECTED" }]
+      target_features: [{ type: "ocr", text: "CONNECTED", confidence: 0.9 }]
     transitions:
       on_success: "switch_to_production_mode"
       on_fail:
