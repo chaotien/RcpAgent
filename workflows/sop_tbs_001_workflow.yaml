@@ -93,7 +93,6 @@ states:
         #- { type: "image", path: "assets/btn_go_auto_gray.png" }
         - { type: "image", path: "assets/btn_go_auto_gray.png", edge_filter: true, confidence: 0.6 }
     action:
-    action:
       type: "click"
     verification:
       type: "appear"
