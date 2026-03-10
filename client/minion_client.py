@@ -6,7 +6,27 @@ import time
 import shutil
 import threading
 import importlib.util
+import sys
 from datetime import datetime
+
+# ==============================================================================
+# [NEW] 智慧路徑解析與工作目錄對齊 (Smart Path Resolution)
+# ==============================================================================
+if getattr(sys, 'frozen', False):
+    # 產線模式: 被 PyInstaller 打包成 .exe 執行
+    # 基準路徑就是 .exe 所在的資料夾
+    BASE_PATH = os.path.dirname(sys.executable)
+    PROJECT_ROOT = BASE_PATH
+else:
+    # 開發模式: 直接透過 Python 直譯器執行 (.py)
+    # 基準路徑是這個 .py 檔所在的 client/ 資料夾
+    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+    # 專案根目錄是 client/ 的上一層 (即 RcpAgent/)
+    PROJECT_ROOT = os.path.dirname(BASE_PATH)
+
+# 強制將工作目錄 (CWD) 切換到專案根目錄
+# 這樣 Engine 裡所有的相對路徑 (如 assets/, core/, workflows/, logs/) 絕對不會迷路！
+os.chdir(PROJECT_ROOT)
 
 class MinionClient(tk.Tk):
     def __init__(self):
@@ -15,15 +35,15 @@ class MinionClient(tk.Tk):
         self.geometry("380x250")
         self.resizable(False, False)
         
-        # 載入 Minion Config
-        self.config_path = "minion_config.yaml"
+        # 設定檔永遠跟著 minion_client (.py 或 .exe) 放在同一個資料夾
+        self.config_path = os.path.join(BASE_PATH, "minion_config.yaml")
         self.minion_config = self._load_config()
         
         self._init_ui()
 
     def _load_config(self):
         if not os.path.exists(self.config_path):
-            messagebox.showerror("錯誤", f"找不到設定檔: {self.config_path}")
+            messagebox.showerror("錯誤", f"找不到設定檔:\n{self.config_path}\n\n請確保設定檔與程式放在同一個目錄下。")
             self.destroy()
             return {}
         with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -33,7 +53,7 @@ class MinionClient(tk.Tk):
         main_frame = ttk.Frame(self, padding="20 20 20 20")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Wafer Load SOP Executor", font=("Arial", 14, "bold")).pack(pady=(0, 15))
+        ttk.Label(main_frame, text="Wafer Load SOP 執行器", font=("Arial", 14, "bold")).pack(pady=(0, 15))
 
         # Recipe Name Input
         frame_recipe = ttk.Frame(main_frame)
@@ -99,7 +119,7 @@ class MinionClient(tk.Tk):
         self.btn_run.config(state=tk.DISABLED)
         self.lbl_status.config(text="執行中... 視窗即將隱藏", foreground="blue")
         self.update()
-        time.sleep(0.5) # 給一點時間讓使用者看狀態
+        time.sleep(0.5) 
         
         # 收下/隱藏視窗
         self.withdraw()
