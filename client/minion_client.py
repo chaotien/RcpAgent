@@ -1,3 +1,12 @@
+# 在 minion_client.py 最上方加上這些 (僅供 PyInstaller 掃描用，實際邏輯不會用到)
+try:
+    import pyautogui
+    import cv2
+    import numpy
+    import PIL
+    import yaml
+except ImportError:
+    pass
 import tkinter as tk
 from tkinter import ttk, messagebox
 import yaml
