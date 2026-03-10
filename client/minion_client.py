@@ -7,39 +7,81 @@ import shutil
 import threading
 import importlib.util
 import sys
+import ctypes
 from datetime import datetime
 
 # ==============================================================================
-# [NEW] 智慧路徑解析與工作目錄對齊 (Smart Path Resolution)
+# [智慧路徑解析與工作目錄對齊]
 # ==============================================================================
 if getattr(sys, 'frozen', False):
     # 產線模式: 被 PyInstaller 打包成 .exe 執行
-    # 基準路徑就是 .exe 所在的資料夾
     BASE_PATH = os.path.dirname(sys.executable)
     PROJECT_ROOT = BASE_PATH
 else:
     # 開發模式: 直接透過 Python 直譯器執行 (.py)
-    # 基準路徑是這個 .py 檔所在的 client/ 資料夾
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
-    # 專案根目錄是 client/ 的上一層 (即 RcpAgent/)
     PROJECT_ROOT = os.path.dirname(BASE_PATH)
 
 # 強制將工作目錄 (CWD) 切換到專案根目錄
-# 這樣 Engine 裡所有的相對路徑 (如 assets/, core/, workflows/, logs/) 絕對不會迷路！
 os.chdir(PROJECT_ROOT)
 
 class MinionClient(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🤖 RcpAgent Minion - Wafer Load")
-        self.geometry("380x250")
+        self.title("Recipe Minion")
+        self.geometry("380x280")
         self.resizable(False, False)
         
-        # 設定檔永遠跟著 minion_client (.py 或 .exe) 放在同一個資料夾
+        # ======================================================================
+        # [NEW] 設定視窗 Icon (支援 .ico 或 .png)
+        # ======================================================================
+        ico_path = os.path.join(BASE_PATH, "minion.ico")
+        png_path = os.path.join(BASE_PATH, "minion.png")
+        try:
+            if os.path.exists(ico_path):
+                self.iconbitmap(ico_path)  # Windows 原生支援 .ico
+            elif os.path.exists(png_path):
+                icon_img = tk.PhotoImage(file=png_path)
+                self.iconphoto(False, icon_img) # Tkinter 8.6+ 支援直接載入 PNG
+        except Exception as e:
+            print(f"⚠️ 無法載入 Icon: {e}")
+        
+        # 綁定視窗關閉事件，確保安全釋放作業系統狀態
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+        
         self.config_path = os.path.join(BASE_PATH, "minion_config.yaml")
         self.minion_config = self._load_config()
         
         self._init_ui()
+        
+        # ======================================================================
+        # 啟動 Windows 底層 API 防閒置 (零干擾、無迴圈)
+        # ======================================================================
+        self._enable_windows_awake()
+
+    def _enable_windows_awake(self):
+        """呼叫 Windows API 防止螢幕鎖定與休眠 (不送出實體按鍵，不干擾 RPA)"""
+        if os.name == 'nt':
+            try:
+                # 參數: ES_CONTINUOUS (0x80000000) | ES_DISPLAY_REQUIRED (0x00000002) | ES_SYSTEM_REQUIRED (0x00000001)
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001)
+                self.lbl_idle.config(text="🛡️ OS 級防鎖定保護已啟動 (Active)", foreground="#4CAF50")
+            except Exception as e:
+                self.lbl_idle.config(text=f"⚠️ 防鎖定啟動失敗: {e}", foreground="red")
+
+    def _disable_windows_awake(self):
+        """程式關閉時，還原 Windows 原本的休眠與鎖定設定"""
+        if os.name == 'nt':
+            try:
+                # 參數: ES_CONTINUOUS (0x80000000)
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            except Exception:
+                pass
+
+    def _on_closing(self):
+        """視窗關閉時的清理動作"""
+        self._disable_windows_awake()
+        self.destroy()
 
     def _load_config(self):
         if not os.path.exists(self.config_path):
@@ -53,7 +95,11 @@ class MinionClient(tk.Tk):
         main_frame = ttk.Frame(self, padding="20 20 20 20")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Wafer Load SOP 執行器", font=("Arial", 14, "bold")).pack(pady=(0, 15))
+        ttk.Label(main_frame, text="Wafer Load SOP", font=("Arial", 14, "bold")).pack(pady=(0, 10))
+
+        # 防閒置狀態提示
+        self.lbl_idle = ttk.Label(main_frame, text="🛡️ 防鎖定保護啟動中...", foreground="gray", font=("Arial", 9))
+        self.lbl_idle.pack(pady=(0, 10))
 
         # Recipe Name Input
         frame_recipe = ttk.Frame(main_frame)
@@ -115,16 +161,16 @@ class MinionClient(tk.Tk):
 
         slot_offset = slot_mapping[slot]
         
-        # 防止重複點擊，隱藏視窗
+        # 防止重複點擊，更新狀態
         self.btn_run.config(state=tk.DISABLED)
         self.lbl_status.config(text="執行中... 視窗即將隱藏", foreground="blue")
         self.update()
         time.sleep(0.5) 
         
-        # 收下/隱藏視窗
+        # 隱藏視窗
         self.withdraw()
 
-        # 開啟獨立執行緒執行 SOP，避免阻塞 GUI
+        # 開啟獨立執行緒執行 SOP
         threading.Thread(
             target=self._run_engine_task, 
             args=(recipe, slot, slot_offset), 
@@ -142,38 +188,32 @@ class MinionClient(tk.Tk):
         result_dir = os.path.join(result_base, f"Run_{timestamp_str}")
         
         try:
-            # 1. 建立當次 Result 資料夾
             os.makedirs(result_dir, exist_ok=True)
             
-            # 2. 載入基礎 SOP 並置換參數
             with open(base_sop_path, 'r', encoding='utf-8') as f:
                 sop_data = yaml.safe_load(f)
                 
             self._replace_placeholders(sop_data, recipe, slot_offset)
             
-            # 3. 另存本次執行的 YAML 到 Result 資料夾
             run_yaml_path = os.path.join(result_dir, "executed_sop.yaml")
             with open(run_yaml_path, 'w', encoding='utf-8') as f:
                 yaml.dump(sop_data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
-            # 4. 紀錄執行前時間 (用來過濾稍後產生的 log/截圖)
             start_time = time.time()
 
-            # 5. 動態載入 Engine
+            # 動態載入 Engine
             spec = importlib.util.spec_from_file_location("dynamic_engine", engine_script)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             EngineClass = getattr(module, engine_class)
             
-            # 6. 初始化並執行
             engine_instance = EngineClass(run_yaml_path)
             report = engine_instance.run()
 
-            # 7. 整理產物：將 engine 剛才在 logs/ 底下產生的檔案搬到 result_dir
+            # 收集 Log 產物
             if os.path.exists("logs"):
                 for filename in os.listdir("logs"):
                     filepath = os.path.join("logs", filename)
-                    # 只要是這次執行期間新產生/修改的檔案，就搬過去
                     if os.path.isfile(filepath) and os.path.getmtime(filepath) >= start_time:
                         shutil.move(filepath, os.path.join(result_dir, filename))
             
@@ -183,17 +223,15 @@ class MinionClient(tk.Tk):
         except Exception as e:
             messagebox.showerror("執行錯誤", f"任務執行失敗:\n{e}")
         finally:
-            # 任務結束，透過 tkinter 的 after 方法安全地在主執行緒還原視窗
             self.after(0, self._restore_ui)
 
     def _restore_ui(self):
-        self.deiconify() # 重新顯示視窗
+        self.deiconify() 
         self.btn_run.config(state=tk.NORMAL)
         self.lbl_status.config(text="等待下一次任務", foreground="gray")
         self.entry_recipe.delete(0, tk.END)
         self.entry_slot.delete(0, tk.END)
         
-        # 讓視窗強迫置頂提醒使用者任務結束
         self.attributes('-topmost', True)
         self.after(1000, lambda: self.attributes('-topmost', False))
 
