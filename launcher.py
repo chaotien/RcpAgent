@@ -32,7 +32,7 @@ def run_suite():
     # 3. 啟動測試引擎 (阻塞模式，等待測試完成)
     print(">>> Starting Automation Engine...")
     try:
-        subprocess.run([sys.executable, "core/auto_gui_engine.py", "workflows/sop_tbs_002_workflow.yaml"], check=False)
+        subprocess.run([sys.executable, "core/auto_gui_engine.py", "workflows/sop_tbs_001_workflow.yaml"], check=False)
     except Exception as e:
         print(f"Engine Error: {e}")
     finally:

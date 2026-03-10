@@ -5,6 +5,7 @@
 
 global_config:
   app_name: "ToolBehaviorSimulator.exe"
+  enable_ocr: true
   default_timeout: 5.0
   action_post_delay: 0.2
   max_retries: 3

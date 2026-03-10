@@ -1,3 +1,4 @@
 # Ignore log folder and all files under it
 logs/
 core/__pycache__/
+models/

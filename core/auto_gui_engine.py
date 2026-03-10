@@ -30,33 +30,53 @@ logger = logging.getLogger("AgentEngine")
 logger.info(f"🚀 Engine started. Logs: {log_filename}")
 
 # ==============================================================================
-# 1. Vision System (新增 Scale Calibration 機制)
+# 1. Vision System (動態 OCR 開關與自動下載機制)
 # ==============================================================================
 class VisionSystem:
-    def __init__(self, confidence_threshold=0.8):
+    def __init__(self, confidence_threshold=0.8, enable_ocr=False):
         self.confidence_threshold = confidence_threshold
         self.MOCK_MODE = False 
         self.reader = None
-        self._init_easyocr()
         
-        # [NEW] 解析度/縮放自動校正參數
+        if enable_ocr:
+            self._init_easyocr()
+        else:
+            logger.info("ℹ️ OCR engine disabled by default. (Saves init time)")
+            
         self.is_calibrated = False
         self.scale_factor = 1.0
-        # 涵蓋常見的 Windows 縮放比例: 100%, 125%, 150%, 175%, 200%, 及縮小比例
         self.calibration_scales = [1.0, 1.25, 1.5, 1.75, 2.0, 0.8, 0.75, 0.5]
 
     def _init_easyocr(self):
         try:
             import easyocr 
-            self.reader = easyocr.Reader(['en'], gpu=False)
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            model_dir = os.path.join(base_dir, "models", "easyocr")
+            if not os.path.exists(model_dir):
+                os.makedirs(model_dir)
+                
+            logger.info(f"⏳ Initializing OCR engine. Models directory: {model_dir}")
+            logger.info("   (If models are missing, it will attempt to download them automatically...)")
+            
+            # [MODIFIED] download_enabled=True
+            # 邏輯: 若本地已存在，直接離線載入; 若不存在，自動嘗試連網下載。
+            self.reader = easyocr.Reader(
+                ['en'], 
+                gpu=False, 
+                model_storage_directory=model_dir, 
+                download_enabled=True 
+            )
+            logger.info("✅ OCR engine initialized successfully.")
         except Exception as e:
-            logger.warning(f"⚠️ EasyOCR init warning: {e}")
+            # 捕捉網路未連線或下載失敗的情況，確保主程式不會崩潰
+            logger.warning(f"⚠️ EasyOCR init failed (Network Error or Missing Model): {e}")
+            logger.warning("   -> OCR features will be disabled for this run.")
+            self.reader = None
 
     def detect(self, feature: Dict, roi: Optional[Tuple[int, int, int, int]] = None) -> Tuple[bool, Optional[Tuple[int, int]]]:
         f_type = feature.get("type")
         target_info = feature.get("text") or feature.get("path") or "unknown"
         
-        # [NEW] 讀取是否啟用邊緣濾波
         use_edge_filter = feature.get("edge_filter", False)
         filter_msg = " [Edge Filter Enabled]" if use_edge_filter else ""
         
@@ -64,7 +84,7 @@ class VisionSystem:
 
         if self.MOCK_MODE: return True, (100, 100)
 
-        # 1. Image (Template Matching 支援 Scale Calibration & Edge Filter)
+        # 1. Image
         if f_type == "image":
             path = feature.get("path")
             conf = feature.get("confidence", self.confidence_threshold)
@@ -74,36 +94,25 @@ class VisionSystem:
                     return False, None
                 
                 original_img = Image.open(path)
-                
-                # 決定要掃描的縮放比例
                 scales_to_try = [self.scale_factor] if self.is_calibrated else self.calibration_scales
                 
-                # 如果啟用了 Edge Filter，我們先截取螢幕 ROI 並做邊緣轉換
                 screen_edges = None
                 if use_edge_filter:
                     screen_img = pyautogui.screenshot(region=roi)
                     screen_gray = cv2.cvtColor(np.array(screen_img), cv2.COLOR_RGB2GRAY)
-                    # 使用 Canny 邊緣偵測 (數值 50, 150 為常用經驗值，可依需求調整)
                     screen_edges = cv2.Canny(screen_gray, 50, 150)
                 
                 for scale in scales_to_try:
                     new_w = int(original_img.width * scale)
                     new_h = int(original_img.height * scale)
-                    
-                    if new_w == 0 or new_h == 0:
-                        continue
+                    if new_w == 0 or new_h == 0: continue
                         
                     resized_img = original_img.resize((new_w, new_h), Image.LANCZOS)
                     
                     try:
                         if use_edge_filter:
-                            # ---------------------------------------------------------
-                            # 【自訂 OpenCV 邊緣匹配邏輯】
-                            # ---------------------------------------------------------
                             template_gray = cv2.cvtColor(np.array(resized_img), cv2.COLOR_RGB2GRAY)
                             template_edges = cv2.Canny(template_gray, 50, 150)
-                            
-                            # 確保模板不會比螢幕擷取畫面還大
                             if template_edges.shape[0] > screen_edges.shape[0] or template_edges.shape[1] > screen_edges.shape[1]:
                                 continue
                                 
@@ -111,49 +120,42 @@ class VisionSystem:
                             min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
                             
                             if max_val >= conf:
-                                # 計算中心點 (相對於整個螢幕)
                                 center_x = max_loc[0] + (new_w // 2)
                                 center_y = max_loc[1] + (new_h // 2)
                                 if roi:
                                     center_x += roi[0]
                                     center_y += roi[1]
-                                    
-                                box = True # Flag indicating success
+                                box = True
                             else:
                                 box = False
                         else:
-                            # ---------------------------------------------------------
-                            # 【傳統 PyAutoGUI 灰階亮度匹配邏輯】
-                            # ---------------------------------------------------------
                             box = pyautogui.locateOnScreen(resized_img, region=roi, confidence=conf, grayscale=True)
                             if box:
                                 center = pyautogui.center(box)
                                 center_x, center_y = center.x, center.y
                                 
                         if box:
-                            # 如果是第一次成功匹配，鎖定此縮放係數！
                             if not self.is_calibrated:
                                 self.is_calibrated = True
                                 self.scale_factor = scale
-                                logger.info(f"\n      🎯 [Calibration Success] UI Scale Factor locked at: {scale}x")
-                                logger.info(f"      👉 All subsequent image matchings will use this scale.\n")
-                                
-                            logger.info(f"      ✅ Found Image at ({center_x}, {center_y}) (Scale used: {scale}x)")
+                                logger.info(f"\n      🎯 [Calibration] UI Scale Factor locked at: {scale}x\n")
+                            logger.info(f"      ✅ Found Image at ({center_x}, {center_y}) (Scale: {scale}x)")
                             return True, (center_x, center_y)
                             
                     except pyautogui.ImageNotFoundException:
-                        pass # 繼續嘗試下一個縮放比例
+                        pass
                         
-                # 如果所有 scale 都掃過還是找不到
-                logger.info("      ❌ Image Not Found (Tried all scales)" if not self.is_calibrated else "      ❌ Image Not Found")
+                logger.info("      ❌ Image Not Found")
                 return False, None
                 
             except Exception as e:
                 logger.warning(f"      ⚠️ Vision Error: {e}")
 
-        # 2. OCR (本來就具有一定的 Scale Invariance，但回傳的座標仍需配合縮放後的 ROI)
+        # 2. OCR
         elif f_type == "ocr":
-            if not self.reader: return False, None
+            if not self.reader: 
+                logger.warning("      ⚠️ Cannot detect OCR: OCR engine is disabled or failed to initialize.")
+                return False, None
             target_text = feature.get("text")
             try:
                 screenshot = pyautogui.screenshot(region=roi)
@@ -214,45 +216,34 @@ class ActionExecutor:
         
         if atype == "wait":
             time.sleep(config.get("duration", 1.0))
-        
         elif atype == "click":
             offset = config.get("offset", [0, 0])
             tx, ty = coords[0] + offset[0], coords[1] + offset[1]
             pyautogui.click(tx, ty)
             self._move_away()
-
         elif atype == "input_text":
             text = config.get("text", "")
             offset = config.get("offset", [0, 0])
             submit = config.get("submit_key", None)
             clear_first = config.get("clear_first", False)
-            
             if coords: 
                 fx, fy = coords[0] + offset[0], coords[1] + offset[1]
                 pyautogui.click(fx, fy)
                 time.sleep(0.2)
-                
                 if clear_first:
-                    logger.info(f"   🧹 Clearing existing text (Ctrl+A -> Del)")
                     pyautogui.hotkey('ctrl', 'a')
                     time.sleep(0.1)
                     pyautogui.press('delete')
                     time.sleep(0.1)
-                    
-            logger.info(f"   ⌨️ Action: Typing '{text}'")
             pyautogui.write(text)
-            
             if submit and submit.lower() != "none":
-                logger.info(f"   ⏎ Action: Pressing key '{submit}'")
                 pyautogui.press(submit)
             self._move_away()
-
         elif atype == "click_sequence":
             base = coords
             for step in config.get("sequence", []):
                 txt, img = step.get("text"), step.get("image")
                 off = step.get("offset", [0, 0])
-                
                 found, step_coords = False, None
                 if txt: found, step_coords = self.vision.detect({"type": "ocr", "text": txt}, roi=roi)
                 elif img: found, step_coords = self.vision.detect({"type": "image", "path": img}, roi=roi)
@@ -264,7 +255,6 @@ class ActionExecutor:
                     base = target 
                 time.sleep(step.get("delay", 0.5))
             self._move_away()
-
         time.sleep(self.delay)
 
 # ==============================================================================
@@ -276,15 +266,13 @@ class AgentEngine:
             self.config = yaml.safe_load(f)
         
         self.global_config = self.config.get("global_config", {})
-        
-        # 保存狀態陣列，以維持 YAML 中的順序
         self.states_list = self.config.get("states", [])
         self.states = {s["name"]: s for s in self.states_list}
-        
         self.interrupt_handlers = self.config.get("interrupt_handlers", [])
         self.interrupt_triggers = defaultdict(int)
         
-        self.vision = VisionSystem()
+        enable_ocr = self.global_config.get("enable_ocr", False)
+        self.vision = VisionSystem(enable_ocr=enable_ocr)
         self.screen = ScreenManager(self.config.get("roi_map", {}))
         self.executor = ActionExecutor(self.global_config, self.vision, self.screen)
         
@@ -302,6 +290,26 @@ class AgentEngine:
         except: 
             return None
 
+    def _report_api_status(self, state_name: str, status: str, message: str = "", screenshot_path: str = None):
+        if not self.global_config.get("enable_api_reporting", False):
+            return
+            
+        endpoint = self.global_config.get("api_endpoint", "http://localhost:8000/api/status")
+        payload = {
+            "app_name": self.global_config.get("app_name", "UnknownApp"),
+            "state": state_name,
+            "status": status,
+            "message": message,
+            "screenshot": screenshot_path,
+            "timestamp": time.time()
+        }
+        try:
+            import requests
+            requests.post(endpoint, json=payload, timeout=3)
+            logger.info(f"📡 API Report Sent: [{status}] {state_name}")
+        except Exception as e:
+            logger.debug(f"⚠️ API Report Failed: {e}")
+
     def _resolve_anchor(self, cfg, base_roi):
         if not cfg: return base_roi
         found, coords = self.vision.detect(cfg["feature"], roi=base_roi)
@@ -309,22 +317,16 @@ class AgentEngine:
             ax, ay, aw, ah = cfg["search_area"]
             logger.info(f"   ⚓ Anchor locked. Offset ROI: {cfg['search_area']}")
             return (coords[0] + ax, coords[1] + ay, aw, ah)
-        logger.warning("   ⚠️ Anchor not found, using base ROI")
         return base_roi
 
     def _attempt_recovery(self, state_name: str) -> bool:
-        if not self.interrupt_handlers:
-            return False
-            
-        logger.info(f"🛡️ Entering Defense Mode for state [{state_name}]...")
+        if not self.interrupt_handlers: return False
         for handler in self.interrupt_handlers:
             h_name = handler["name"]
             trigger_key = f"{state_name}_{h_name}"
             max_t = handler.get("max_triggers", 1)
             
-            if self.interrupt_triggers[trigger_key] >= max_t:
-                continue
-                
+            if self.interrupt_triggers[trigger_key] >= max_t: continue
             d_cfg = handler.get("detection", {})
             found, coords, used_roi = self._detect_with_retry(d_cfg, f"defense_{h_name}")
             
@@ -334,22 +336,20 @@ class AgentEngine:
                     self.executor.execute(handler["action"], coords or (0,0), roi=used_roi)
                 self.interrupt_triggers[trigger_key] += 1
                 return True
-                
-        logger.info("🛡️ Defense failed or not applicable. Proceeding to fail handlers.")
         return False
 
-    # [NEW] 將 start_state 預設改為 None，並自動抓取第一個 state
     def run(self, start_state: Optional[str] = None) -> dict:
         if start_state is None:
-            if not self.states_list:
-                raise ValueError("YAML 檔案中沒有定義任何 states！")
+            if not self.states_list: raise ValueError("YAML 檔案中沒有定義任何 states！")
             start_state = self.states_list[0]["name"]
-            logger.info(f"👉 偵測到 YAML 初始起點，自動設定 start_state = '{start_state}'")
 
         curr = start_state
+        self._report_api_status(curr, "started", "Task initiated")
+        
         try:
             while curr not in ["end_task", "abort_task", "report_transfer_timeout"]:
                 logger.info(f"\n📍 Entering State: [{curr}]")
+                self._report_api_status(curr, "running")
                 
                 state_def = self.states.get(curr)
                 if not state_def:
@@ -363,7 +363,6 @@ class AgentEngine:
 
                 curr = self._process(state_def)
             
-            # 將執行結果打包，供未來 Agent 呼叫使用
             success = (curr == "end_task")
             logger.info(f"🏁 Finished. Final State: {curr}")
             
@@ -374,15 +373,17 @@ class AgentEngine:
             }
 
             if success:
-                logger.info("📸 Capturing success screenshot...")
                 report["screenshot_path"] = self._save_debug("task_success", None, return_path=True)
+                self._report_api_status(curr, "success", "Task completed", report["screenshot_path"])
             else:
                 report["screenshot_path"] = self._save_debug("task_failed", None, return_path=True)
+                self._report_api_status(curr, "failed", "Task failed or aborted", report["screenshot_path"])
 
             return report
 
         except Exception as e:
             logger.exception(f"⛔ Crash: {e}")
+            self._report_api_status(curr, "error", str(e))
             return {"status": "error", "final_state": curr, "screenshot_path": None}
 
     def _detect_with_retry(self, detect_cfg: Dict, state_name: str) -> Tuple[bool, Any, Any]:
@@ -408,10 +409,7 @@ class AgentEngine:
         
         if not found:
             logger.warning(f"⚠️ Detection Failed for [{state['name']}]")
-            if self._attempt_recovery(state['name']):
-                logger.info(f"🔄 Defense completed. Restarting state [{state['name']}]")
-                time.sleep(1.0)
-                return state['name']
+            if self._attempt_recovery(state['name']): return state['name']
             return self._handle_fail(state)
 
         if "action" in state:
@@ -420,10 +418,7 @@ class AgentEngine:
         if "verification" in state:
             if not self._verify(state["verification"], state['name']):
                 logger.warning(f"⚠️ Verification Failed for [{state['name']}]")
-                if self._attempt_recovery(state['name']):
-                    logger.info(f"🔄 Defense completed. Restarting state [{state['name']}]")
-                    time.sleep(1.0)
-                    return state['name']
+                if self._attempt_recovery(state['name']): return state['name']
                 return self._handle_fail(state)
 
         self.retries[state['name']] = 0 
@@ -433,7 +428,6 @@ class AgentEngine:
         roi_key = v_cfg.get("roi")
         base_roi = self.screen.get_roi_rect(roi_key)
         check_roi = self._resolve_anchor(v_cfg.get("anchor"), base_roi)
-        
         timeout = v_cfg.get("timeout", 5.0)
         v_type = v_cfg.get("type", "appear")
         target_features = v_cfg.get("target_features", [])
@@ -446,13 +440,8 @@ class AgentEngine:
                     found_any = True
                     break
             
-            if v_type == "appear" and found_any:
-                logger.info(f"   ✅ Verification Passed (Appeared)")
-                return True
-            elif v_type == "disappear" and not found_any:
-                logger.info(f"   ✅ Verification Passed (Disappeared)")
-                return True
-            
+            if v_type == "appear" and found_any: return True
+            elif v_type == "disappear" and not found_any: return True
             time.sleep(0.5)
             
         self._save_debug(name+"_verify_fail", check_roi)
@@ -465,17 +454,14 @@ class AgentEngine:
         for br in fail.get("error_branches", []):
             roi = self.screen.get_roi_rect(br["condition"].get("roi"))
             if self.vision.detect(br["condition"], roi=roi)[0]:
-                logger.info(f"🔀 Error Branch matched: {br['next_state']}")
                 return br['next_state']
 
         max_r = fail.get("retry", 0)
         if self.retries[name] < max_r:
             self.retries[name] += 1
-            logger.warning(f"🔄 Retrying [{name}] ({self.retries[name]}/{max_r})...")
             return name
 
         fallback = fail.get("fallback", "abort_task")
-        logger.error(f"💀 State [{name}] failed. Fallback: {fallback}")
         return fallback
 
 if __name__ == "__main__":
@@ -483,8 +469,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1: yaml_file = sys.argv[1]
     
     engine = AgentEngine(yaml_file)
-    logger.info("⏳ Starting in 3s...")
-    time.sleep(3)
-    
-    # [NEW] 不帶入參數，讓引擎自動決定從 YAML 第一個 state 開始
     engine.run()
