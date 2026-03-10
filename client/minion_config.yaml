@@ -1,0 +1,23 @@
+# ==============================================================================
+# Minion Client 設定檔
+# 定義 Engine 路徑、SOP 樣板、以及 Slot ID 對應的點擊偏移量
+# ==============================================================================
+
+client_config:
+  # 動態載入的 Engine 腳本路徑與 Class 名稱
+  engine_script: "core/auto_gui_engine_lite.py"
+  engine_class: "AgentEngine"
+  
+  # 要被當作樣板的基礎 SOP 路徑
+  base_sop: "workflows/sop_wafer_load_template.yaml"
+  
+  # 執行結果存放的主要目錄
+  result_base_dir: "results"
+
+# Slot ID 轉換表 (對應到 offset 的 [x, y])
+slot_mapping:
+  "1": [0, 0]
+  "2": [0, 30]
+  "3": [0, 60]
+  "4": [0, 90]
+  "5": [0, 120]
