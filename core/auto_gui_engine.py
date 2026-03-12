@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import os
 import sys
+import ctypes
 from PIL import Image
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
@@ -56,10 +57,7 @@ class VisionSystem:
                 os.makedirs(model_dir)
                 
             logger.info(f"⏳ Initializing OCR engine. Models directory: {model_dir}")
-            logger.info("   (If models are missing, it will attempt to download them automatically...)")
             
-            # [MODIFIED] download_enabled=True
-            # 邏輯: 若本地已存在，直接離線載入; 若不存在，自動嘗試連網下載。
             self.reader = easyocr.Reader(
                 ['en'], 
                 gpu=False, 
@@ -68,7 +66,6 @@ class VisionSystem:
             )
             logger.info("✅ OCR engine initialized successfully.")
         except Exception as e:
-            # 捕捉網路未連線或下載失敗的情況，確保主程式不會崩潰
             logger.warning(f"⚠️ EasyOCR init failed (Network Error or Missing Model): {e}")
             logger.warning("   -> OCR features will be disabled for this run.")
             self.reader = None
@@ -199,7 +196,7 @@ class ScreenManager:
         return None
 
 # ==============================================================================
-# 3. Action Executor
+# 3. Action Executor (整合 click_strategy 與 move_away 開關)
 # ==============================================================================
 class ActionExecutor:
     def __init__(self, global_config, vision, screen):
@@ -208,19 +205,42 @@ class ActionExecutor:
         self.screen = screen
 
     def _move_away(self):
+        """將滑鼠移開以免干擾後續辨識 (Hover 效應)"""
         pyautogui.moveTo(10, 10) 
+
+    def _execute_click_strategy(self, x, y, strategy):
+        """根據設定的策略執行點擊動作"""
+        if strategy == "slow":
+            pyautogui.mouseDown(x, y)
+            time.sleep(0.15)
+            pyautogui.mouseUp(x, y)
+        elif strategy == "ctypes": # 保留 ctypes 做為終極備用手段
+            pyautogui.moveTo(x, y)
+            time.sleep(0.1)
+            ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+            time.sleep(0.1)
+            ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+        else: # "standard" 或未知的都預設為 standard
+            pyautogui.click(x, y)
 
     def execute(self, config: Dict, coords: Tuple[int, int], roi=None):
         atype = config.get("type", "wait")
         logger.info(f"   🎬 Executing Action: {atype}")
         
+        # 解析選項: move_away 預設為 True; click_strategy 預設為 standard
+        should_move_away = config.get("move_away", True)
+        strategy = config.get("click_strategy", "standard")
+        
         if atype == "wait":
             time.sleep(config.get("duration", 1.0))
+            
         elif atype == "click":
             offset = config.get("offset", [0, 0])
             tx, ty = coords[0] + offset[0], coords[1] + offset[1]
-            pyautogui.click(tx, ty)
-            self._move_away()
+            self._execute_click_strategy(tx, ty, strategy)
+            if should_move_away:
+                self._move_away()
+                
         elif atype == "input_text":
             text = config.get("text", "")
             offset = config.get("offset", [0, 0])
@@ -228,7 +248,7 @@ class ActionExecutor:
             clear_first = config.get("clear_first", False)
             if coords: 
                 fx, fy = coords[0] + offset[0], coords[1] + offset[1]
-                pyautogui.click(fx, fy)
+                self._execute_click_strategy(fx, fy, strategy)
                 time.sleep(0.2)
                 if clear_first:
                     pyautogui.hotkey('ctrl', 'a')
@@ -238,7 +258,9 @@ class ActionExecutor:
             pyautogui.write(text)
             if submit and submit.lower() != "none":
                 pyautogui.press(submit)
-            self._move_away()
+            if should_move_away:
+                self._move_away()
+                
         elif atype == "click_sequence":
             base = coords
             for step in config.get("sequence", []):
@@ -251,10 +273,13 @@ class ActionExecutor:
                 target = step_coords if found else base
                 if target:
                     tx, ty = target[0] + off[0], target[1] + off[1]
-                    pyautogui.click(tx, ty)
+                    step_strategy = step.get("click_strategy", strategy) # 支援步驟級覆蓋策略
+                    self._execute_click_strategy(tx, ty, step_strategy)
                     base = target 
                 time.sleep(step.get("delay", 0.5))
-            self._move_away()
+            if should_move_away:
+                self._move_away()
+                
         time.sleep(self.delay)
 
 # ==============================================================================
