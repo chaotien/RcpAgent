@@ -1,14 +1,5 @@
-# 在 minion_client.py 最上方加上這些 (僅供 PyInstaller 掃描用，實際邏輯不會用到)
-try:
-    import pyautogui
-    import cv2
-    import numpy
-    import PIL
-    import yaml
-except ImportError:
-    pass
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import yaml
 import os
 import time
@@ -37,58 +28,52 @@ os.chdir(PROJECT_ROOT)
 class MinionClient(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Recipe Minion")
-        self.geometry("380x280")
+        self.title("🤖 RcpAgent Minion - Task Runner")
+        self.geometry("480x380") # 加大視窗以容納新的路徑選擇欄位
         self.resizable(False, False)
         
-        # ======================================================================
-        # [NEW] 設定視窗 Icon (支援 .ico 或 .png)
-        # ======================================================================
+        # 設定視窗 Icon (支援 .ico 或 .png)
         ico_path = os.path.join(BASE_PATH, "minion.ico")
         png_path = os.path.join(BASE_PATH, "minion.png")
         try:
             if os.path.exists(ico_path):
-                self.iconbitmap(ico_path)  # Windows 原生支援 .ico
+                self.iconbitmap(ico_path)
             elif os.path.exists(png_path):
                 icon_img = tk.PhotoImage(file=png_path)
-                self.iconphoto(False, icon_img) # Tkinter 8.6+ 支援直接載入 PNG
+                self.iconphoto(False, icon_img)
         except Exception as e:
             print(f"⚠️ 無法載入 Icon: {e}")
         
-        # 綁定視窗關閉事件，確保安全釋放作業系統狀態
+        # 綁定視窗關閉事件
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
         
+        # 載入 Config
         self.config_path = os.path.join(BASE_PATH, "minion_config.yaml")
         self.minion_config = self._load_config()
         
         self._init_ui()
         
-        # ======================================================================
-        # 啟動 Windows 底層 API 防閒置 (零干擾、無迴圈)
-        # ======================================================================
+        # 啟動 OS 級防閒置
         self._enable_windows_awake()
 
     def _enable_windows_awake(self):
-        """呼叫 Windows API 防止螢幕鎖定與休眠 (不送出實體按鍵，不干擾 RPA)"""
+        """呼叫 Windows API 防止螢幕鎖定與休眠"""
         if os.name == 'nt':
             try:
-                # 參數: ES_CONTINUOUS (0x80000000) | ES_DISPLAY_REQUIRED (0x00000002) | ES_SYSTEM_REQUIRED (0x00000001)
                 ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000002 | 0x00000001)
                 self.lbl_idle.config(text="🛡️ OS 級防鎖定保護已啟動 (Active)", foreground="#4CAF50")
             except Exception as e:
                 self.lbl_idle.config(text=f"⚠️ 防鎖定啟動失敗: {e}", foreground="red")
 
     def _disable_windows_awake(self):
-        """程式關閉時，還原 Windows 原本的休眠與鎖定設定"""
+        """還原 Windows 原本的休眠與鎖定設定"""
         if os.name == 'nt':
             try:
-                # 參數: ES_CONTINUOUS (0x80000000)
                 ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
             except Exception:
                 pass
 
     def _on_closing(self):
-        """視窗關閉時的清理動作"""
         self._disable_windows_awake()
         self.destroy()
 
@@ -104,13 +89,44 @@ class MinionClient(tk.Tk):
         main_frame = ttk.Frame(self, padding="20 20 20 20")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Wafer Load SOP", font=("Arial", 14, "bold")).pack(pady=(0, 10))
+        ttk.Label(main_frame, text="Wafer Load SOP 執行器", font=("Arial", 14, "bold")).pack(pady=(0, 10))
 
-        # 防閒置狀態提示
         self.lbl_idle = ttk.Label(main_frame, text="🛡️ 防鎖定保護啟動中...", foreground="gray", font=("Arial", 9))
         self.lbl_idle.pack(pady=(0, 10))
 
-        # Recipe Name Input
+        client_cfg = self.minion_config.get("client_config", {})
+        default_wf = client_cfg.get("base_sop", "workflows/sop_wafer_load_template.yaml")
+        default_engine = client_cfg.get("engine_script", "core/lite_gui_engine.py")
+
+        # ==========================================
+        # [NEW] Workflow 選擇
+        # ==========================================
+        frame_wf = ttk.Frame(main_frame)
+        frame_wf.pack(fill=tk.X, pady=5)
+        ttk.Label(frame_wf, text="Workflow:", width=12).pack(side=tk.LEFT)
+        self.entry_wf = ttk.Entry(frame_wf)
+        self.entry_wf.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.entry_wf.insert(0, default_wf)
+        btn_browse_wf = ttk.Button(frame_wf, text="...", width=3, command=self._browse_wf)
+        btn_browse_wf.pack(side=tk.LEFT, padx=(5, 0))
+
+        # ==========================================
+        # [NEW] Engine 選擇
+        # ==========================================
+        frame_engine = ttk.Frame(main_frame)
+        frame_engine.pack(fill=tk.X, pady=5)
+        ttk.Label(frame_engine, text="Engine:", width=12).pack(side=tk.LEFT)
+        self.entry_engine = ttk.Entry(frame_engine)
+        self.entry_engine.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.entry_engine.insert(0, default_engine)
+        btn_browse_engine = ttk.Button(frame_engine, text="...", width=3, command=self._browse_engine)
+        btn_browse_engine.pack(side=tk.LEFT, padx=(5, 0))
+
+        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+
+        # ==========================================
+        # Recipe & Slot 輸入
+        # ==========================================
         frame_recipe = ttk.Frame(main_frame)
         frame_recipe.pack(fill=tk.X, pady=5)
         ttk.Label(frame_recipe, text="Recipe Name:", width=12).pack(side=tk.LEFT)
@@ -118,7 +134,6 @@ class MinionClient(tk.Tk):
         self.entry_recipe.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.entry_recipe.insert(0, "default_recipe.xml")
 
-        # Slot ID Input
         frame_slot = ttk.Frame(main_frame)
         frame_slot.pack(fill=tk.X, pady=5)
         ttk.Label(frame_slot, text="Slot ID:", width=12).pack(side=tk.LEFT)
@@ -126,13 +141,36 @@ class MinionClient(tk.Tk):
         self.entry_slot.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.entry_slot.insert(0, "1")
 
-        # Status Label
         self.lbl_status = ttk.Label(main_frame, text="準備就緒", foreground="gray")
         self.lbl_status.pack(pady=10)
 
-        # Run Button
         self.btn_run = ttk.Button(main_frame, text="▶ 開始執行 (Run)", command=self.start_execution)
         self.btn_run.pack(fill=tk.X, pady=5)
+
+    def _browse_wf(self):
+        path = filedialog.askopenfilename(
+            initialdir=PROJECT_ROOT,
+            title="選擇 Workflow 劇本檔",
+            filetypes=[("YAML files", "*.yaml"), ("All files", "*.*")]
+        )
+        if path:
+            # 轉換為相對路徑 (若在專案目錄下) 以保持畫面簡潔
+            try: path = os.path.relpath(path, PROJECT_ROOT)
+            except: pass
+            self.entry_wf.delete(0, tk.END)
+            self.entry_wf.insert(0, path)
+
+    def _browse_engine(self):
+        path = filedialog.askopenfilename(
+            initialdir=os.path.join(PROJECT_ROOT, "core"),
+            title="選擇 Engine 引擎檔",
+            filetypes=[("Python files", "*.py"), ("All files", "*.*")]
+        )
+        if path:
+            try: path = os.path.relpath(path, PROJECT_ROOT)
+            except: pass
+            self.entry_engine.delete(0, tk.END)
+            self.entry_engine.insert(0, path)
 
     def _replace_placeholders(self, data, recipe_name, slot_offset_val):
         """遞迴遍歷 YAML 資料，替換 {recipe_name} 與 {slot_offset}"""
@@ -156,9 +194,20 @@ class MinionClient(tk.Tk):
                     self._replace_placeholders(v, recipe_name, slot_offset_val)
 
     def start_execution(self):
+        wf_path = self.entry_wf.get().strip()
+        engine_path = self.entry_engine.get().strip()
         recipe = self.entry_recipe.get().strip()
         slot = self.entry_slot.get().strip()
 
+        if not wf_path or not engine_path:
+            messagebox.showwarning("警告", "Workflow 與 Engine 路徑不可為空！")
+            return
+        if not os.path.exists(wf_path):
+            messagebox.showwarning("警告", f"找不到 Workflow 檔案: \n{wf_path}")
+            return
+        if not os.path.exists(engine_path):
+            messagebox.showwarning("警告", f"找不到 Engine 檔案: \n{engine_path}")
+            return
         if not recipe or not slot:
             messagebox.showwarning("警告", "Recipe Name 與 Slot ID 不可為空！")
             return
@@ -170,27 +219,22 @@ class MinionClient(tk.Tk):
 
         slot_offset = slot_mapping[slot]
         
-        # 防止重複點擊，更新狀態
         self.btn_run.config(state=tk.DISABLED)
         self.lbl_status.config(text="執行中... 視窗即將隱藏", foreground="blue")
         self.update()
         time.sleep(0.5) 
         
-        # 隱藏視窗
         self.withdraw()
 
-        # 開啟獨立執行緒執行 SOP
         threading.Thread(
             target=self._run_engine_task, 
-            args=(recipe, slot, slot_offset), 
+            args=(wf_path, engine_path, recipe, slot, slot_offset), 
             daemon=True
         ).start()
 
-    def _run_engine_task(self, recipe, slot, slot_offset):
+    def _run_engine_task(self, base_sop_path, engine_script, recipe, slot, slot_offset):
         client_cfg = self.minion_config.get("client_config", {})
-        base_sop_path = client_cfg.get("base_sop", "workflows/sop_tbs_002_workflow.yaml")
-        engine_script = client_cfg.get("engine_script", "core/lite_gui_engine.py")
-        engine_class = client_cfg.get("engine_class", "AgentEngine")
+        engine_class = client_cfg.get("engine_class", "AgentEngine") # 類別名稱通常保持不變
         result_base = client_cfg.get("result_base_dir", "results")
 
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -210,7 +254,7 @@ class MinionClient(tk.Tk):
 
             start_time = time.time()
 
-            # 動態載入 Engine
+            # 動態載入使用者選擇的 Engine
             spec = importlib.util.spec_from_file_location("dynamic_engine", engine_script)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
@@ -218,13 +262,38 @@ class MinionClient(tk.Tk):
             
             engine_instance = EngineClass(run_yaml_path)
             report = engine_instance.run()
+            
+            # [FIX] 增加緩衝時間，確保 Engine 已經完全釋放 File Handles
+            # 特別是 Python 的 logging module 有時會稍微延遲釋放
+            time.sleep(1.0) 
 
-            # 收集 Log 產物
+            # [FIX] 優化的產物收集邏輯 (加入重試與忽略無法搬移的檔案)
             if os.path.exists("logs"):
                 for filename in os.listdir("logs"):
                     filepath = os.path.join("logs", filename)
                     if os.path.isfile(filepath) and os.path.getmtime(filepath) >= start_time:
-                        shutil.move(filepath, os.path.join(result_dir, filename))
+                        dest_path = os.path.join(result_dir, filename)
+                        
+                        # 加入重試機制
+                        max_retries = 3
+                        for i in range(max_retries):
+                            try:
+                                # 優先嘗試 move，若失敗可能是權限或鎖定問題
+                                shutil.move(filepath, dest_path)
+                                break # 成功就跳出重試迴圈
+                            except PermissionError as e:
+                                print(f"⚠️ [Log Move] Permission denied for {filename}, retrying ({i+1}/{max_retries})...")
+                                time.sleep(0.5)
+                            except Exception as e:
+                                print(f"⚠️ [Log Move] Unexpected error moving {filename}: {e}")
+                                # 若 move 一直失敗，嘗試用 copy 再刪除 (有時能繞過某些鎖定)
+                                try:
+                                    shutil.copy2(filepath, dest_path)
+                                    # 注意：這裡不強制刪除來源檔，避免再次報錯，大不了留在 logs/ 裡
+                                    break
+                                except Exception:
+                                    pass
+
             
             status_text = f"✅ 執行完成!\n結果: {report.get('status')}\n產物已存放於:\n{result_dir}"
             messagebox.showinfo("任務結束", status_text)

@@ -3,3 +3,4 @@ logs/
 core/__pycache__/
 models/
 client/minion.png
+results/
