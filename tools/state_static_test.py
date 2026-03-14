@@ -6,11 +6,23 @@ import pyscreeze
 import os
 import importlib.util
 import sys
+import json
+import inspect
+
+# ==============================================================================
+# [智慧路徑解析與工作目錄對齊]
+# ==============================================================================
+if getattr(sys, 'frozen', False):
+    BASE_PATH = os.path.dirname(sys.executable)
+    PROJECT_ROOT = os.path.dirname(BASE_PATH)
+else:
+    BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(BASE_PATH)
+
+os.chdir(PROJECT_ROOT)
 
 # ==============================================================================
 # 1. 環境欺騙模組 (PyAutoGUI Mocker)
-# 攔截 PyAutoGUI 的螢幕擷取與定位函式，將其導向我們載入的靜態截圖。
-# 這樣一來，完全不需修改 Engine 的程式碼，它就能在靜態圖上完美運作。
 # ==============================================================================
 class PyAutoGUIMocker:
     def __init__(self, pil_image: Image.Image):
@@ -20,13 +32,11 @@ class PyAutoGUIMocker:
         self._original_size = pyautogui.size
 
     def patch(self):
-        """套用攔截"""
         pyautogui.screenshot = self.mock_screenshot
         pyautogui.locateOnScreen = self.mock_locateOnScreen
         pyautogui.size = self.mock_size
 
     def unpatch(self):
-        """解除攔截"""
         pyautogui.screenshot = self._original_screenshot
         pyautogui.locateOnScreen = self._original_locateOnScreen
         pyautogui.size = self._original_size
@@ -47,16 +57,13 @@ class PyAutoGUIMocker:
         
         haystack = self.mock_screenshot(region)
         try:
-            # 呼叫 pyscreeze 底層的匹配演算法
             res = pyscreeze.locate(image, haystack, confidence=confidence, grayscale=grayscale)
             if res:
                 if region:
-                    # 如果有 region，將座標加上 region 的偏移量還原成全域座標
                     return pyscreeze.Box(res.left + int(region[0]), res.top + int(region[1]), res.width, res.height)
                 return res
             return None
         except pyscreeze.ImageNotFoundException:
-            # 支援新版 PyAutoGUI 拋出例外的情境
             if hasattr(pyautogui, 'USE_IMAGE_NOT_FOUND_EXCEPTION') and pyautogui.USE_IMAGE_NOT_FOUND_EXCEPTION:
                 raise pyautogui.ImageNotFoundException()
             return None
@@ -68,7 +75,12 @@ class StateTesterGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("🤖 RcpAgent 狀態機靜態測試工具 (State Tester)")
-        self.geometry("1400x900")
+        self.geometry("1400x950") # 稍微加高以容納新欄位
+        
+        # 載入預設設定
+        import yaml
+        self.config_path = os.path.join(PROJECT_ROOT, "client", "minion_config.yaml")
+        self.minion_config = self._load_config()
         
         # 狀態變數
         self.engine_class = None
@@ -81,32 +93,69 @@ class StateTesterGUI(tk.Tk):
         self.img_x_offset = 0
         self.img_y_offset = 0
         
-        self.last_detected_coords = None # 保存 Detection 找到的座標供 Action 使用
+        self.last_detected_coords = None
         
         self._init_ui()
 
+    def _load_config(self):
+        if os.path.exists(self.config_path):
+            try:
+                import yaml
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f)
+            except Exception:
+                pass
+        return {}
+
     def _init_ui(self):
         # --- Top Config Panel ---
-        config_frame = tk.LabelFrame(self, text="1. Engine & Configuration Loader", pady=5, padx=10)
+        config_frame = tk.LabelFrame(self, text="1. 環境設定與載入 (Configuration Loader)", pady=5, padx=10)
         config_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        tk.Label(config_frame, text="Engine 腳本路徑:").grid(row=0, column=0, sticky=tk.E, pady=2)
-        self.entry_engine_path = tk.Entry(config_frame, width=40)
-        self.entry_engine_path.insert(0, "core/auto_gui_engine.py")
-        self.entry_engine_path.grid(row=0, column=1, padx=5)
+        client_cfg = self.minion_config.get("client_config", {})
+        default_wf = client_cfg.get("base_sop", "workflows/sop_wafer_load_template.yaml")
+        default_engine = client_cfg.get("engine_script", "core/auto_gui_engine.py")
+        default_class = client_cfg.get("engine_class", "AgentEngine")
+        default_asset = client_cfg.get("default_asset_dir", "assets")
+
+        # 第一排：路徑選擇
+        row1 = tk.Frame(config_frame)
+        row1.pack(fill=tk.X, pady=2)
         
-        tk.Label(config_frame, text="Engine 類別名稱:").grid(row=0, column=2, sticky=tk.E, padx=5)
-        self.entry_engine_class = tk.Entry(config_frame, width=20)
-        self.entry_engine_class.insert(0, "AgentEngine")
-        self.entry_engine_class.grid(row=0, column=3, padx=5)
+        tk.Label(row1, text="Workflow:").pack(side=tk.LEFT)
+        self.entry_wf = tk.Entry(row1, width=30)
+        self.entry_wf.insert(0, default_wf)
+        self.entry_wf.pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="...", command=self._browse_wf).pack(side=tk.LEFT)
         
-        tk.Label(config_frame, text="YAML 腳本路徑:").grid(row=1, column=0, sticky=tk.E, pady=2)
-        self.entry_yaml_path = tk.Entry(config_frame, width=40)
-        self.entry_yaml_path.insert(0, "workflows/sop_tbs_002_workflow.yaml")
-        self.entry_yaml_path.grid(row=1, column=1, padx=5)
+        tk.Label(row1, text="Engine:").pack(side=tk.LEFT, padx=(15, 0))
+        self.entry_engine = tk.Entry(row1, width=30)
+        self.entry_engine.insert(0, default_engine)
+        self.entry_engine.pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="...", command=self._browse_engine).pack(side=tk.LEFT)
         
-        btn_load_engine = tk.Button(config_frame, text="📥 載入 Engine 與 YAML", bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), command=self.load_engine)
-        btn_load_engine.grid(row=0, column=4, rowspan=2, padx=15, sticky=tk.NS)
+        tk.Label(row1, text="Class:").pack(side=tk.LEFT, padx=(15, 0))
+        self.entry_class = tk.Entry(row1, width=15)
+        self.entry_class.insert(0, default_class)
+        self.entry_class.pack(side=tk.LEFT, padx=5)
+
+        # 第二排：Assets 與 變數注入
+        row2 = tk.Frame(config_frame)
+        row2.pack(fill=tk.X, pady=2)
+        
+        tk.Label(row2, text="Assets Dir:").pack(side=tk.LEFT)
+        self.entry_asset = tk.Entry(row2, width=30)
+        self.entry_asset.insert(0, default_asset)
+        self.entry_asset.pack(side=tk.LEFT, padx=5)
+        tk.Button(row2, text="...", command=self._browse_asset).pack(side=tk.LEFT)
+        
+        tk.Label(row2, text="注入變數(JSON):").pack(side=tk.LEFT, padx=(15, 0))
+        self.entry_vars = tk.Entry(row2, width=40)
+        self.entry_vars.insert(0, '{"recipe_name": "test.xml", "slot_offset": [0, 30]}')
+        self.entry_vars.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        btn_load_engine = tk.Button(config_frame, text="📥 載入設定 (Load)", bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), command=self.load_engine)
+        btn_load_engine.pack(side=tk.RIGHT, padx=10, pady=5)
 
         # --- Main Layout (Sidebar + Canvas) ---
         paned = tk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -119,7 +168,6 @@ class StateTesterGUI(tk.Tk):
         lbl_states = tk.LabelFrame(sidebar, text="2. 選擇測試 State", padx=5, pady=5)
         lbl_states.pack(fill=tk.BOTH, expand=True)
         
-        # State Listbox
         self.listbox_states = tk.Listbox(lbl_states, font=("Consolas", 11), exportselection=False)
         self.listbox_states.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         scrollbar = tk.Scrollbar(lbl_states, command=self.listbox_states.yview)
@@ -153,19 +201,60 @@ class StateTesterGUI(tk.Tk):
         self.bind("<Configure>", self.on_resize)
 
     # ==========================================
+    # File Browsing
+    # ==========================================
+    def _browse_wf(self):
+        path = filedialog.askopenfilename(initialdir=PROJECT_ROOT, filetypes=[("YAML", "*.yaml"), ("All", "*.*")])
+        if path:
+            try: path = os.path.relpath(path, PROJECT_ROOT)
+            except: pass
+            self.entry_wf.delete(0, tk.END)
+            self.entry_wf.insert(0, path)
+
+    def _browse_engine(self):
+        path = filedialog.askopenfilename(initialdir=os.path.join(PROJECT_ROOT, "core"), filetypes=[("Python", "*.py"), ("All", "*.*")])
+        if path:
+            try: path = os.path.relpath(path, PROJECT_ROOT)
+            except: pass
+            self.entry_engine.delete(0, tk.END)
+            self.entry_engine.insert(0, path)
+
+    def _browse_asset(self):
+        path = filedialog.askdirectory(initialdir=os.path.join(PROJECT_ROOT, "assets"))
+        if path:
+            try: path = os.path.relpath(path, PROJECT_ROOT)
+            except: pass
+            self.entry_asset.delete(0, tk.END)
+            self.entry_asset.insert(0, path)
+
+    # ==========================================
     # Engine & Data Loading
     # ==========================================
     def load_engine(self):
-        engine_path = self.entry_engine_path.get()
-        class_name = self.entry_engine_class.get()
-        yaml_path = self.entry_yaml_path.get()
+        engine_path = self.entry_engine.get().strip()
+        class_name = self.entry_class.get().strip()
+        yaml_path = self.entry_wf.get().strip()
+        asset_dir = self.entry_asset.get().strip()
+        vars_json_str = self.entry_vars.get().strip()
         
         if not os.path.exists(engine_path) or not os.path.exists(yaml_path):
             messagebox.showerror("錯誤", "找不到 Engine 腳本或 YAML 檔案！請檢查路徑。")
             return
             
+        # 解析動態變數
+        dynamic_vars = {}
         try:
-            # 1. 動態匯入指定的 Engine Class
+            if vars_json_str:
+                dynamic_vars = json.loads(vars_json_str)
+        except Exception as e:
+            messagebox.showwarning("警告", f"注入變數 JSON 格式錯誤！\n{e}")
+            return
+            
+        # 強制注入 asset_dir
+        dynamic_vars["asset_dir"] = asset_dir
+
+        try:
+            # 動態匯入指定的 Engine Class
             module_name = "dynamic_auto_gui_engine"
             spec = importlib.util.spec_from_file_location(module_name, engine_path)
             module = importlib.util.module_from_spec(spec)
@@ -174,16 +263,25 @@ class StateTesterGUI(tk.Tk):
             
             self.engine_class = getattr(module, class_name)
             
-            # 2. 實例化 Engine 
-            # 這裡 Engine 會開始讀取 YAML 並初始化，這就是為什麼我們先不用 mocker
-            self.engine_instance = self.engine_class(yaml_path)
+            # 檢查 Engine 是否支援 dynamic_vars
+            sig = inspect.signature(self.engine_class.__init__)
+            if "dynamic_vars" in sig.parameters:
+                self.engine_instance = self.engine_class(yaml_path, dynamic_vars=dynamic_vars)
+                msg = f"成功載入 Engine ({class_name}) 並注入變數！"
+            else:
+                self.engine_instance = self.engine_class(yaml_path)
+                msg = f"⚠️ 警告: 所選的 Engine 不支援動態變數注入，已退回傳統模式。\n成功載入 Engine ({class_name})！"
             
-            # 3. 填入 Listbox
+            # 如果已經有載入圖片，要更新解析度設定
+            if self.original_image:
+                self.engine_instance.screen.screen_size = self.original_image.size
+            
+            # 填入 Listbox
             self.listbox_states.delete(0, tk.END)
             for state in self.engine_instance.states_list:
                 self.listbox_states.insert(tk.END, state["name"])
                 
-            messagebox.showinfo("成功", f"成功載入 Engine ({class_name}) 與 {len(self.engine_instance.states_list)} 個 States！")
+            messagebox.showinfo("成功", f"{msg}\n共載入 {len(self.engine_instance.states_list)} 個 States。")
             
         except Exception as e:
             messagebox.showerror("載入失敗", f"載入 Engine 或 YAML 時發生錯誤:\n{e}")
@@ -193,10 +291,8 @@ class StateTesterGUI(tk.Tk):
         if not filepath: return
         try:
             self.original_image = Image.open(filepath)
-            # 初始化 Mocker
             self.mocker = PyAutoGUIMocker(self.original_image)
             
-            # 如果 Engine 已經載入，手動更新 Engine 中紀錄的螢幕解析度，避免它用錯本機真實解析度去算 ROI
             if self.engine_instance:
                 self.engine_instance.screen.screen_size = self.original_image.size
                 
@@ -234,7 +330,6 @@ class StateTesterGUI(tk.Tk):
         self.img_x_offset = (c_width - new_w) // 2
         self.img_y_offset = (c_height - new_h) // 2
         
-        # 將背景圖推到最底層
         self.canvas.create_image(self.img_x_offset, self.img_y_offset, anchor=tk.NW, image=self.display_image, tags="bg_img")
         self.canvas.tag_lower("bg_img")
 
@@ -282,17 +377,13 @@ class StateTesterGUI(tk.Tk):
         
         self.clear_drawings()
         
-        # 1. 攔截系統，啟動環境欺騙
         self.mocker.patch()
         try:
-            # 2. 直接調用 Engine 的 detection 核心邏輯
             print(f"\n[Test] Running Detection for '{state_name}'...")
             found, coords, used_roi = self.engine_instance._detect_with_retry(d_cfg, state_name)
         finally:
-            # 3. 確保解除攔截
             self.mocker.unpatch()
 
-        # 4. 繪製結果
         self.draw_roi_box(used_roi, color="#00BFFF", text=f"Detection ROI")
         
         if found:
@@ -317,16 +408,18 @@ class StateTesterGUI(tk.Tk):
             if not self.last_detected_coords:
                 messagebox.showwarning("警告", "請先執行 Detection 並確保成功找到目標，才能計算 Action 落點！")
                 return
-                
-            offset = a_cfg.get("offset", [0, 0])
+            
+            # 使用 Engine 內部的解析方法來解析 offset
+            offset = self.engine_instance.executor._resolve_var(a_cfg.get("offset", [0, 0]))
+            
             tx = self.last_detected_coords[0] + offset[0]
             ty = self.last_detected_coords[1] + offset[1]
             
-            # 繪製最終點擊位置的紅色準星
             self.draw_point((tx, ty), color="#E91E63", radius=6, text="Action Point (w/ offset)")
             
             if atype == "input_text":
-                print(f"⌨️ Simulation: Type text '{a_cfg.get('text', '')}' at {tx, ty}")
+                text_to_type = self.engine_instance.executor._resolve_var(a_cfg.get('text', ''))
+                print(f"⌨️ Simulation: Type text '{text_to_type}' at {tx, ty}")
             else:
                 print(f"🖱️ Simulation: Click at {tx, ty}")
                 
@@ -350,7 +443,6 @@ class StateTesterGUI(tk.Tk):
         try:
             print(f"\n[Test] Running Verification for '{state_name}'...")
             
-            # 手動解析 ROI (為了能夠畫出框框)
             roi_key = v_cfg.get("roi")
             base_roi = self.engine_instance.screen.get_roi_rect(roi_key)
             check_roi = self.engine_instance._resolve_anchor(v_cfg.get("anchor"), base_roi)
@@ -371,7 +463,6 @@ class StateTesterGUI(tk.Tk):
         finally:
             self.mocker.unpatch()
 
-        # 繪製驗證結果
         v_type = v_cfg.get("type", "appear")
         if v_type == "appear":
             if found_any:
