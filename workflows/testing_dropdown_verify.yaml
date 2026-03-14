@@ -69,7 +69,7 @@ states:
       roi: "toolbar"
       target_features:
         - { type: "ocr", text: "Wafer Load" }
-        - { type: "image", path: "assets/icon_wafer_load.png" }
+        - { type: "image", path: "$asset_dir/icon_wafer_load.png" }
     action:
       type: "click"
     verification:
@@ -110,8 +110,8 @@ states:
         search_area: [-50, 20, 200, 150]
       target_features:
         #- { type: "ocr", text: "2" }
-        - { type: "image", path: "assets/dropdown_port2_0.png" }
-        - { type: "image", path: "assets/dropdown_port2_1.png" }
+        - { type: "image", path: "$asset_dir/dropdown_port2_0.png" }
+        - { type: "image", path: "$asset_dir/dropdown_port2_1.png" }
     action:
       type: "click"
     verification:
@@ -121,7 +121,7 @@ states:
         feature: { type: "ocr", text: "Select Port:" }
         search_area: [-50, 20, 200, 150]
       target_features:
-        - { type: "image", path: "assets/dropdown_port2_done_3.png" }
+        - { type: "image", path: "$asset_dir/dropdown_port2_done_3.png" }
     transitions:
       on_success: "load_carrier_map"
       on_fail:

@@ -5,7 +5,7 @@ from PIL import ImageDraw, Image
 
 def test_dropdown_location():
     # 1. 設定參數
-    path = "assets/dropdown_port2_done_3.png"
+    path = "$asset_dir/dropdown_port2_done_3.png"
     roi = (177, 432, 200, 150)
     conf = 0.9  # 建議先從 0.9 開始測試
     

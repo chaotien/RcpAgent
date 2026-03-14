@@ -20,7 +20,7 @@
 2. **ROI (關注區域)**: 如果使用者沒指定，請先填入 `"TODO_ROI"`，後續由人工補上。
 3. **特徵定義 (target_features) - 以 Image 為主，OCR 為輔 (重要！)**:
    - 對於按鈕、圖示、選單、UI 區塊的定位與驗證，請**優先使用 Image**。
-   - **[自動命名]**: 請根據 SOP 語意，自動發明一個合理、具描述性的 snake_case 圖檔名稱（例如 `- { type: "image", path: "assets/btn_confirm.png" }` 或 `assets/tab_settings.png`）。後續人類會依據這個檔名直接進行截圖，**不需要加上 TODO 標記**。
+   - **[自動命名]**: 請根據 SOP 語意，自動發明一個合理、具描述性的 snake_case 圖檔名稱（例如 `- { type: "image", path: "$asset_dir/btn_confirm.png" }` 或 `$asset_dir/tab_settings.png`）。後續人類會依據這個檔名直接進行截圖，**不需要加上 TODO 標記**。
    - 只有在明確需要讀取、比對「變動的純文字內容」，或是作為 Anchor 錨點時，才使用 OCR：`- { type: "ocr", text: "文字內容" }`。
 4. **Anchor (錨點定位)**: 如果使用者說「在 X 文字的旁邊/下方點擊 Y」，請使用 anchor 語法：
    ```yaml
@@ -44,7 +44,7 @@
     detection:
       roi: "TODO_ROI"
       target_features:
-        - { type: "image", path: "assets/lbl_file_name.png" } # LLM 自行發明的合理命名
+        - { type: "image", path: "$asset_dir/lbl_file_name.png" } # LLM 自行發明的合理命名
     action:
       type: "input_text"
       text: "my_recipe.xml"
@@ -56,7 +56,7 @@
       timeout: 5.0
       roi: "TODO_ROI"
       target_features:
-        - { type: "image", path: "assets/btn_open_active.png" } # 優先使用 Image 驗證
+        - { type: "image", path: "$asset_dir/btn_open_active.png" } # 優先使用 Image 驗證
     transitions:
       on_success: "next_step_name"
       on_fail:

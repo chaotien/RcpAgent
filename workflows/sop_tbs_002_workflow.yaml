@@ -35,8 +35,8 @@ interrupt_handlers:
     detection:
       roi: "taskbar_area"
       target_features:
-        - {type: "image", path: "assets/taskbar_app_icon_0.png"}
-        - {type: "image", path: "assets/taskbar_app_icon_1.png"}
+        - {type: "image", path: "$asset_dir/taskbar_app_icon_0.png"}
+        - {type: "image", path: "$asset_dir/taskbar_app_icon_1.png"}
     action:
       type: "click_sequence"
       sequence:
@@ -92,14 +92,14 @@ states:
       roi: "port_1_control"
       target_features:
         #- { type: "image", path: "assets/btn_go_auto_gray.png" }
-        - {type: "image", path: "assets/btn_go_auto_gray.png", edge_filter: true, confidence: 0.6}
+        - {type: "image", path: "$asset_dir/btn_go_auto_gray.png", edge_filter: true, confidence: 0.6}
     action:
       type: "click"
     verification:
       type: "appear"
       roi: "port_1_control"
       target_features:
-        - {type: "image", path: "assets/btn_go_manual_green.png"}
+        - {type: "image", path: "$asset_dir/btn_go_manual_green.png"}
     transitions:
       on_success: "set_port_2_auto"
       on_fail:
@@ -113,14 +113,14 @@ states:
     detection:
       roi: "port_2_control"
       target_features:
-        - {type: "image", path: "assets/btn_go_auto_gray.png"}
+        - {type: "image", path: "$asset_dir/btn_go_auto_gray.png"}
     action:
       type: "click"
     verification:
       type: "appear"
       roi: "port_2_control"
       target_features:
-        - {type: "image", path: "assets/btn_go_manual_green.png"}
+        - {type: "image", path: "$asset_dir/btn_go_manual_green.png"}
     transitions:
       on_success: "trigger_wafer_arrival_port_2"
       on_fail:
@@ -146,7 +146,7 @@ states:
       roi: "schematic_p2"
       target_features:
         - {type: "ocr", text: "CLAMPED"}
-        - {type: "image", path: "assets/status_clamped_blue.png"}
+        - {type: "image", path: "$asset_dir/status_clamped_blue.png"}
     transitions:
       on_success: "switch_to_engineering_mode"
       on_fail:
@@ -183,7 +183,7 @@ states:
       roi: "toolbar"
       target_features:
         - {type: "ocr", text: "Wafer Load"}
-        - {type: "image", path: "assets/icon_wafer_load.png"}
+        - {type: "image", path: "$asset_dir/icon_wafer_load.png"}
     action:
       type: "click"
     verification:
@@ -202,7 +202,7 @@ states:
       retry: 0
       target_features:
         - {type: "ocr", text: "CLAMPED"}
-        - {type: "image", path: "assets/status_clamped_blue.png"}
+        - {type: "image", path: "$asset_dir/status_clamped_blue.png"}
     action:
       type: "log"
       message: "Decision: Port 2 seems active."
@@ -246,8 +246,8 @@ states:
         search_area: [-50, 20, 200, 150]
       target_features:
         #- { type: "ocr", text: "2" }
-        - {type: "image", path: "assets/dropdown_port2_0.png"}
-        - {type: "image", path: "assets/dropdown_port2_1.png"}
+        - {type: "image", path: "$asset_dir/dropdown_port2_0.png"}
+        - {type: "image", path: "$asset_dir/dropdown_port2_1.png"}
     action:
       type: "click"
     verification:
@@ -257,7 +257,7 @@ states:
         feature: {type: "ocr", text: "Select Port:"}
         search_area: [-50, 20, 200, 150]
       target_features:
-        - {type: "image", path: "assets/dropdown_port2_done_3.png", confidence: 0.0}
+        - {type: "image", path: "$asset_dir/dropdown_port2_done_3.png", confidence: 0.0}
     transitions:
       on_success: "load_carrier_map"
       on_fail:
@@ -331,7 +331,7 @@ states:
       roi: "engineering_pnl"
       target_features:
         - {type: "ocr", text: "With Recipe"}
-        - {type: "image", path: "assets/radio_with_recipe_empty.png"}
+        - {type: "image", path: "$asset_dir/radio_with_recipe_empty.png"}
     action:
       type: "click"
       offset: [-20, 0]
@@ -341,7 +341,7 @@ states:
       timeout: 3.0
       target_features:
         - {type: "ocr", text: "Open Recipe File"}
-        - {type: "image", path: "assets/title_open_recipe.png"}
+        - {type: "image", path: "$asset_dir/title_open_recipe.png"}
     transitions:
       on_success: "enter_recipe_name"
       on_fail:
@@ -352,7 +352,7 @@ states:
     detection:
       roi: "dialog_center"
       target_features:
-        - {type: "image", path: "assets/open_file_name.png"}
+        - {type: "image", path: "$asset_dir/open_file_name.png"}
     action:
       type: "input_text"
       text: "ai_testing.xml"
@@ -373,8 +373,8 @@ states:
     detection:
       roi: "dialog_center"
       target_features:
-        - {type: "image", path: "assets/btn_open_0.png"}
-        - {type: "image", path: "assets/btn_open_1.png"}
+        - {type: "image", path: "$asset_dir/btn_open_0.png"}
+        - {type: "image", path: "$asset_dir/btn_open_1.png"}
     action:
       type: "click"
     verification:
@@ -410,7 +410,7 @@ states:
       type: "appear"
       roi: "schematic_full"
       target_features:
-        - {type: "image", path: "assets/wafer_on_chuck.png"}
+        - {type: "image", path: "$asset_dir/wafer_on_chuck.png"}
     transitions:
       on_success: "end_task"
       on_fail:

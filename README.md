@@ -40,7 +40,7 @@ python launcher.py
 *(注意：執行期間請勿隨意移動實體滑鼠。若需緊急中止，請將滑鼠快速移動至螢幕左上角 (0,0) 觸發 FailSafe)*
 
 ## 🛠️ 開發工具 (Tooling)
-* **`tools/asset_helper.py`**: 當您在 YAML 中新增了新的圖片路徑 (如 `assets/new_btn.png`)，執行此腳本，它會自動引導您在螢幕上框選並存檔，告別手動截圖的痛苦。
+* **`tools/asset_helper.py`**: 當您在 YAML 中新增了新的圖片路徑 (如 `$asset_dir/new_btn.png`)，執行此腳本，它會自動引導您在螢幕上框選並存檔，告別手動截圖的痛苦。
 
 ## 📖 SOP YAML 語法指南 (Workflow Reference)
 每個工作流程定義為一個 YAML 檔案。包含三個主要區塊：`global_config`, `roi_map`, 與 `states`。
@@ -67,7 +67,7 @@ roi_map:
         feature: { type: "ocr", text: "Select Port:" }
         search_area: [-50, 20, 200, 150] 
       target_features:
-        - { type: "image", path: "assets/dropdown_port2.png" }
+        - { type: "image", path: "$asset_dir/dropdown_port2.png" }
 
     # [2] 對目標做什麼
     action:
