@@ -5,7 +5,7 @@
 
 client_config:
   # 動態載入的 Engine 腳本路徑與 Class 名稱
-  engine_script: "core/auto_gui_engine_lite.py"
+  engine_script: "core/auto_gui_engine.py"
   engine_class: "AgentEngine"
   
   # 要被當作樣板的基礎 SOP 路徑
