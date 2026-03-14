@@ -7,8 +7,6 @@ import numpy as np
 import os
 import sys
 import ctypes
-import json
-import inspect
 from PIL import Image
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict
@@ -60,6 +58,7 @@ class VisionSystem:
         if self.MOCK_MODE: return True, (100, 100)
 
         if f_type == "image":
+            # 這裡收到的 path 已經是替換過變數的完整路徑了 (例如: assets/model_B/btn.png)
             path = feature.get("path")
             conf = feature.get("confidence", self.confidence_threshold)
             try:
@@ -151,29 +150,13 @@ class ScreenManager:
         return None
 
 # ==============================================================================
-# 3. Action Executor (支援變數解析、策略切換、與防干擾)
+# 3. Action Executor (支援策略切換與防干擾)
 # ==============================================================================
 class ActionExecutor:
-    def __init__(self, global_config, vision, screen, dynamic_vars=None):
+    def __init__(self, global_config, vision, screen):
         self.delay = global_config.get("action_post_delay", 0.5)
         self.vision = vision
         self.screen = screen
-        self.dynamic_vars = dynamic_vars or {}
-
-    def _resolve_var(self, val):
-        """將設定中的 $變數 替換成實際的值 (支援物件替換與字串內插)"""
-        if isinstance(val, str):
-            # 1. 完整替換 (用來替換整個 Array，例如 $slot_offset -> [0, 428])
-            if val.startswith("$") and val[1:] in self.dynamic_vars:
-                return self.dynamic_vars[val[1:]]
-            # 2. 字串內插 (用來替換部分文字，例如 recipe_$recipe_name -> recipe_abc)
-            if "$" in val:
-                res = val
-                for k, v in self.dynamic_vars.items():
-                    if isinstance(v, str):
-                        res = res.replace(f"${k}", v)
-                return res
-        return val
 
     def _move_away(self):
         """將滑鼠移開以免干擾後續辨識 (Hover 效應)"""
@@ -205,15 +188,16 @@ class ActionExecutor:
             time.sleep(config.get("duration", 1.0))
             
         elif atype == "click":
-            offset = self._resolve_var(config.get("offset", [0, 0]))
+            # 這裡的 config.get 拿到的已經是全域替換過的乾淨數值了
+            offset = config.get("offset", [0, 0])
             tx, ty = coords[0] + offset[0], coords[1] + offset[1]
             self._execute_click_strategy(tx, ty, strategy)
             if should_move_away:
                 self._move_away()
                 
         elif atype == "input_text":
-            text = self._resolve_var(config.get("text", ""))
-            offset = self._resolve_var(config.get("offset", [0, 0]))
+            text = config.get("text", "")
+            offset = config.get("offset", [0, 0])
             submit = config.get("submit_key", None)
             clear_first = config.get("clear_first", False) 
             
@@ -242,7 +226,7 @@ class ActionExecutor:
             base = coords
             for step in config.get("sequence", []):
                 img = step.get("image")
-                off = self._resolve_var(step.get("offset", [0, 0]))
+                off = step.get("offset", [0, 0])
                 
                 found, step_coords = False, None
                 if img: found, step_coords = self.vision.detect({"type": "image", "path": img}, roi=roi)
@@ -265,7 +249,12 @@ class ActionExecutor:
 class AgentEngine:
     def __init__(self, config_path: str, dynamic_vars: dict = None):
         with open(config_path, 'r', encoding='utf-8') as f:
-            self.config = yaml.safe_load(f)
+            raw_config = yaml.safe_load(f)
+            
+        self.dynamic_vars = dynamic_vars or {}
+        
+        # [NEW] 在初始化最源頭，直接對整份 YAML 做全域變數替換
+        self.config = self._resolve_config_vars(raw_config)
         
         self.global_config = self.config.get("global_config", {})
         self.states_list = self.config.get("states", [])
@@ -273,14 +262,33 @@ class AgentEngine:
         self.interrupt_handlers = self.config.get("interrupt_handlers", [])
         self.interrupt_triggers = defaultdict(int)
         
-        self.dynamic_vars = dynamic_vars or {}
-        
         self.vision = VisionSystem()
         self.screen = ScreenManager(self.config.get("roi_map", {}))
-        self.executor = ActionExecutor(self.global_config, self.vision, self.screen, self.dynamic_vars)
+        # 不再需要把 dynamic_vars 傳給 Executor，因為它已經被全域替換過了
+        self.executor = ActionExecutor(self.global_config, self.vision, self.screen)
         
         self.loops = defaultdict(int)
         self.retries = defaultdict(int)
+
+    def _resolve_config_vars(self, data):
+        """遞迴遍歷整個 Config，替換所有的 $ 變數"""
+        if isinstance(data, dict):
+            return {k: self._resolve_config_vars(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._resolve_config_vars(v) for v in data]
+        elif isinstance(data, str):
+            # 1. 完整替換 (例: data 為 "$slot_offset", 變數提供 [0, 428])
+            if data.startswith("$") and data[1:] in self.dynamic_vars:
+                return self.dynamic_vars[data[1:]]
+            # 2. 字串內插 (例: data 為 "$asset_dir/btn.png", 變數提供 "assets/model_B")
+            if "$" in data:
+                res = data
+                for k, v in self.dynamic_vars.items():
+                    if isinstance(v, str):
+                        res = res.replace(f"${k}", v)
+                return res
+            return data
+        return data
 
     def _save_debug(self, name, roi, return_path=False):
         try:
