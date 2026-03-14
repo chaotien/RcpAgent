@@ -27,8 +27,8 @@ os.chdir(PROJECT_ROOT)
 class MinionClient(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🤖 RcpAgent Minion - Task Runner")
-        self.geometry("480x380")
+        self.title("yRcpMinion 🤖")
+        self.geometry("480x420") # 加高視窗以容納 Asset 路徑欄位
         self.resizable(False, False)
         
         ico_path = os.path.join(BASE_PATH, "minion.ico")
@@ -79,14 +79,16 @@ class MinionClient(tk.Tk):
         main_frame = ttk.Frame(self, padding="20 20 20 20")
         main_frame.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main_frame, text="Wafer Load SOP 執行器", font=("Arial", 14, "bold")).pack(pady=(0, 10))
+        ttk.Label(main_frame, text="SOP Executor", font=("Arial", 14, "bold")).pack(pady=(0, 10))
         self.lbl_idle = ttk.Label(main_frame, text="🛡️ 防鎖定保護啟動中...", foreground="gray", font=("Arial", 9))
         self.lbl_idle.pack(pady=(0, 10))
 
         client_cfg = self.minion_config.get("client_config", {})
         default_wf = client_cfg.get("base_sop", "workflows/sop_wafer_load_template.yaml")
-        default_engine = client_cfg.get("engine_script", "core/auto_gui_engine.py")
+        default_engine = client_cfg.get("engine_script", "core/auto_gui_engine_lite.py")
+        default_asset = client_cfg.get("default_asset_dir", "assets")
 
+        # 1. Workflow 選擇
         frame_wf = ttk.Frame(main_frame)
         frame_wf.pack(fill=tk.X, pady=5)
         ttk.Label(frame_wf, text="Workflow:", width=12).pack(side=tk.LEFT)
@@ -95,6 +97,7 @@ class MinionClient(tk.Tk):
         self.entry_wf.insert(0, default_wf)
         ttk.Button(frame_wf, text="...", width=3, command=self._browse_wf).pack(side=tk.LEFT, padx=(5, 0))
 
+        # 2. Engine 選擇
         frame_engine = ttk.Frame(main_frame)
         frame_engine.pack(fill=tk.X, pady=5)
         ttk.Label(frame_engine, text="Engine:", width=12).pack(side=tk.LEFT)
@@ -103,8 +106,18 @@ class MinionClient(tk.Tk):
         self.entry_engine.insert(0, default_engine)
         ttk.Button(frame_engine, text="...", width=3, command=self._browse_engine).pack(side=tk.LEFT, padx=(5, 0))
 
+        # 3. [NEW] Asset Directory 選擇
+        frame_asset = ttk.Frame(main_frame)
+        frame_asset.pack(fill=tk.X, pady=5)
+        ttk.Label(frame_asset, text="Assets Dir:", width=12).pack(side=tk.LEFT)
+        self.entry_asset = ttk.Entry(frame_asset)
+        self.entry_asset.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.entry_asset.insert(0, default_asset)
+        ttk.Button(frame_asset, text="...", width=3, command=self._browse_asset).pack(side=tk.LEFT, padx=(5, 0))
+
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
 
+        # Recipe Name
         frame_recipe = ttk.Frame(main_frame)
         frame_recipe.pack(fill=tk.X, pady=5)
         ttk.Label(frame_recipe, text="Recipe Name:", width=12).pack(side=tk.LEFT)
@@ -112,6 +125,7 @@ class MinionClient(tk.Tk):
         self.entry_recipe.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.entry_recipe.insert(0, "default_recipe.xml")
 
+        # Slot ID
         frame_slot = ttk.Frame(main_frame)
         frame_slot.pack(fill=tk.X, pady=5)
         ttk.Label(frame_slot, text="Slot ID:", width=12).pack(side=tk.LEFT)
@@ -141,14 +155,27 @@ class MinionClient(tk.Tk):
             self.entry_engine.delete(0, tk.END)
             self.entry_engine.insert(0, path)
 
+    def _browse_asset(self):
+        # 選擇資料夾 (Directory)
+        path = filedialog.askdirectory(initialdir=os.path.join(PROJECT_ROOT, "assets"), title="選擇機台截圖包資料夾")
+        if path:
+            try: path = os.path.relpath(path, PROJECT_ROOT)
+            except: pass
+            self.entry_asset.delete(0, tk.END)
+            self.entry_asset.insert(0, path)
+
     def start_execution(self):
         wf_path = self.entry_wf.get().strip()
         engine_path = self.entry_engine.get().strip()
+        asset_dir = self.entry_asset.get().strip()
         recipe = self.entry_recipe.get().strip()
         slot = self.entry_slot.get().strip()
 
-        if not all([wf_path, engine_path, recipe, slot]):
+        if not all([wf_path, engine_path, asset_dir, recipe, slot]):
             messagebox.showwarning("警告", "所有欄位皆不可為空！")
+            return
+        if not os.path.exists(asset_dir):
+            messagebox.showwarning("警告", f"找不到截圖包目錄: \n{asset_dir}")
             return
 
         slot_mapping = self.minion_config.get("slot_mapping", {})
@@ -166,11 +193,11 @@ class MinionClient(tk.Tk):
 
         threading.Thread(
             target=self._run_engine_task, 
-            args=(wf_path, engine_path, recipe, slot_offset), 
+            args=(wf_path, engine_path, asset_dir, recipe, slot_offset), 
             daemon=True
         ).start()
 
-    def _run_engine_task(self, base_sop_path, engine_script, recipe, slot_offset):
+    def _run_engine_task(self, base_sop_path, engine_script, asset_dir, recipe, slot_offset):
         client_cfg = self.minion_config.get("client_config", {})
         engine_class = client_cfg.get("engine_class", "AgentEngine") 
         result_base = client_cfg.get("result_base_dir", "results")
@@ -181,29 +208,28 @@ class MinionClient(tk.Tk):
         try:
             os.makedirs(result_dir, exist_ok=True)
             
-            # [架構升級]：不再修改 YAML 檔案內容，只原封不動地複製一份當作紀錄
             run_yaml_path = os.path.join(result_dir, "executed_sop.yaml")
             shutil.copy2(base_sop_path, run_yaml_path)
 
-            # 將變數打包成 Dict
+            # ========================================================
+            # [核心升級] 將 asset_dir 注入到 dynamic_vars 中
+            # ========================================================
             dynamic_vars = {
-                "recipe_name": recipe,
-                "slot_offset": slot_offset
+                "asset_dir": asset_dir,     # 給 VisionSystem 找圖用
+                "recipe_name": recipe,      # 給 Action 輸入文字用
+                "slot_offset": slot_offset  # 給 Action 點擊位移用
             }
             
-            # 另存一份 JSON，清楚紀錄這次跑了什麼參數，方便事後追查
             with open(os.path.join(result_dir, "run_params.json"), "w", encoding="utf-8") as f:
                 json.dump(dynamic_vars, f, indent=4, ensure_ascii=False)
 
             start_time = time.time()
 
-            # 動態載入 Engine
             spec = importlib.util.spec_from_file_location("dynamic_engine", engine_script)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             EngineClass = getattr(module, engine_class)
             
-            # 檢查所選的 Engine 是否支援動態變數注入
             sig = inspect.signature(EngineClass.__init__)
             if "dynamic_vars" in sig.parameters:
                 engine_instance = EngineClass(run_yaml_path, dynamic_vars=dynamic_vars)
@@ -214,7 +240,6 @@ class MinionClient(tk.Tk):
             report = engine_instance.run()
             time.sleep(1.0) 
 
-            # 收集產物
             if os.path.exists("logs"):
                 for filename in os.listdir("logs"):
                     filepath = os.path.join("logs", filename)

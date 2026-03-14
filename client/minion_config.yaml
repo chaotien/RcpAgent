@@ -1,6 +1,6 @@
 # ==============================================================================
 # Minion Client 設定檔
-# 定義 Engine 路徑、SOP 樣板、以及 Slot ID 對應的點擊偏移量
+# 定義 Engine 路徑、SOP 樣板、截圖包路徑、以及 Slot ID 對應的點擊偏移量
 # ==============================================================================
 
 client_config:
@@ -10,6 +10,9 @@ client_config:
   
   # 要被當作樣板的基礎 SOP 路徑
   base_sop: "workflows/sop_wafer_load_template.yaml"
+  
+  # 預設的截圖素材包路徑 (可根據機台型號切換，例如 assets/model_A)
+  default_asset_dir: "assets"
   
   # 執行結果存放的主要目錄
   result_base_dir: "results"
